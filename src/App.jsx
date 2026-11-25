@@ -37,6 +37,7 @@ import {
   evaluateFoolproofTwoOpenHands,
   stepTrackedHandsFade,
 } from './utils/personTracker';
+import { soundEngine } from './utils/soundEngine';
 import LoadingScreen from './components/LoadingScreen';
 import UnifranzLogo from './components/UnifranzLogo';
 import {
@@ -50,6 +51,8 @@ import {
   Cpu,
   Square,
   Keyboard,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 
 /**
@@ -62,14 +65,13 @@ function smoothstep(edge0, edge1, x) {
 }
 
 export default function App() {
-  // === 1. Estado del Espejo Interactivo 100% en Vivo ===
+  // === 1. Estado del Espejo Interactivo 100% en Vivo + Sistema de Sonido Web Audio API ===
   const [accessoryModeIdx, setAccessoryModeIdx] = useState(0);
   const [orbitEnabled, setOrbitEnabled] = useState(true);
   const [activeMention, setActiveMention] = useState(null); // null | 'IA' | 'CIBER'
-  // Regla estricta: el Fondo Negro SOLO cambia manualmente con este botón
   const [blackBgEnabled, setBlackBgEnabled] = useState(false);
-  // Botón manual para fijar/probar el Teclado Holográfico con un clic
   const [manualKeyboardEnabled, setManualKeyboardEnabled] = useState(false);
+  const [soundMuted, setSoundMuted] = useState(false);
 
   const [simTwoPersons, setSimTwoPersons] = useState(false);
   const [simHandMode, setSimHandMode] = useState('POWERS'); // 'POWERS' | 'KEYBOARD' | 'GAMING' | 'ROCK'
@@ -99,10 +101,7 @@ export default function App() {
   const fpsSpanRef = useRef(null);
   const peopleSpanRef = useRef(null);
 
-  // Canvases auxiliares para la Composición en 3 Capas Exactas del Modo Fondo Negro:
-  // 1) rawMaskCanvasRef: 256x144 donde se vuelca el smoothstep(0.45, 0.75) de la máscara de persona
-  // 2) blurredMaskCanvasRef: 256x144 donde se aplica blur(4px) para bordes de cabello/hombros suaves
-  // 3) personLayerCanvasRef: resolución completa del video original recortada con destination-in
+  // Canvases auxiliares para la Composición en 3 Capas Exactas del Modo Fondo Negro
   const rawMaskCanvasRef = useRef(null);
   const blurredMaskCanvasRef = useRef(null);
   const personLayerCanvasRef = useRef(null);
@@ -156,21 +155,26 @@ export default function App() {
     simTiltOverride: 0,
   });
 
-  // Modelos MediaPipe Tasks Vision (selfie_segmenter.tflite específico para personas frente a cámara)
+  // Modelos MediaPipe Tasks Vision
   const landmarkersRef = useRef({
     face: null,
     hand: null,
     segmenter: null,
   });
 
-  // Estado de seguimiento a 60 FPS en Ref
+  // Estado de seguimiento y banderas de transición de audio a 60 FPS en Ref
   const trackingRef = useRef({
     trackedPersons: [],
     trackedHands: [],
     keyboardAlpha: 0,
+    wasKeyboardVisible: false,
+    wasConsoleActive: false,
+    wasRightShieldActive: false,
     lastValidTypingTs: 0,
+    lastFusionTriggerTs: 0,
     terminalCharsTyped: 8,
     techParticles: [],
+    psSymbolParticles: [],
     shockwaves: [],
   });
 
@@ -199,11 +203,11 @@ export default function App() {
     };
   }, []);
 
-  // Inicializar cámara 854x480 @ 60fps y modelos MediaPipe (FaceLandmarker, HandLandmarker & selfie_segmenter.tflite)
+  // Inicializar cámara 854x480 @ 60fps y modelos MediaPipe
   const initExperience = useCallback(async (useSimulation = false) => {
     setCameraError(null);
     setLoadingProgress(20);
-    setLoadingStatus('Pre-renderizando logos oficiales en OffscreenCanvas...');
+    setLoadingStatus('Pre-renderizando logos oficiales y sintetizador Web Audio API...');
     prewarmTechBadgeSprites();
 
     setLoadingProgress(40);
@@ -281,7 +285,6 @@ export default function App() {
           outputConfidenceMasks: true,
         });
       } catch (segErr) {
-        console.warn('SelfieSegmenter GPU fallback a CPU:', segErr);
         try {
           imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
             baseOptions: {
@@ -368,8 +371,33 @@ export default function App() {
     []
   );
 
+  // Disparar partículas de símbolos PlayStation (△ ○ ✕ □) + destello sonoro Arcade Pop
+  const spawnPlayStationSymbolParticle = useCallback((originX, originY) => {
+    const list = trackingRef.current.psSymbolParticles;
+    if (list.length > 36) return;
+
+    const syms = ['△', '○', '✕', '□'];
+    const sym = syms[Math.floor(Math.random() * syms.length)];
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.65;
+    const speed = 3 + Math.random() * 5.5;
+
+    list.push({
+      sym,
+      x: originX + (Math.random() - 0.5) * 30,
+      y: originY - 12,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: 16 + Math.random() * 7,
+      alpha: 1,
+      color: sym === '△' || sym === '✕' ? '#FF6B00' : '#FFFFFF',
+    });
+
+    soundEngine.playArcadeSymbolPop();
+  }, []);
+
   // Iniciar el Minijuego Interactivo "¿Qué Mención de Sistemas eres?"
   const startSistemasQuiz = useCallback(() => {
+    soundEngine.playUiClick();
     quizRef.current = {
       active: true,
       questionIdx: 0,
@@ -390,7 +418,7 @@ export default function App() {
   }, [triggerEnergyShockwave]);
 
   // ============================================================================
-  // BUCLE DE RESPUESTA INSTANTÁNEA (ZERO-LAG) + COMPOSICIÓN EN 3 CAPAS DEL FONDO NEGRO
+  // BUCLE DE RESPUESTA INSTANTÁNEA (ZERO-LAG) + COMPOSICIÓN EN 3 CAPAS + AUDIO SCI-FI
   // ============================================================================
   useEffect(() => {
     if (!isReady) return;
@@ -510,8 +538,6 @@ export default function App() {
               lastDetectTs = ts;
               const segResult = landmarkersRef.current.segmenter.segmentForVideo(video, ts);
               if (segResult?.confidenceMasks?.length > 0) {
-                // En selfie_segmenter, si hay más de una máscara, el índice final corresponde a la persona en primer plano;
-                // si solo hay 1 máscara (256x144), confidenceMasks[0] tiene la confianza [0.0..1.0] de la persona.
                 const masks = segResult.confidenceMasks;
                 const personMask = masks[masks.length - 1];
                 const mW = personMask.width;
@@ -538,7 +564,7 @@ export default function App() {
                   personLayerCanvas.height = vH;
                 }
 
-                // Paso 1: Umbral suave (smoothstep entre 0.45 y 0.75) para eliminar manchas y fantasmas del techo/pared
+                // Paso 1: Umbral suave (smoothstep entre 0.45 y 0.75)
                 const rCtx = rawMaskCanvas.getContext('2d');
                 const imgData = rCtx.createImageData(mW, mH);
                 const d = imgData.data;
@@ -553,15 +579,14 @@ export default function App() {
                 }
                 rCtx.putImageData(imgData, 0, 0);
 
-                // Paso 2: Suavizado de bordes (Feathering con blur(4px) solo en el canvas pequeño 256x144 de la máscara)
+                // Paso 2: Suavizado de bordes (Feathering con blur(4px) solo en el canvas pequeño 256x144)
                 const bCtx = blurredMaskCanvas.getContext('2d');
                 bCtx.clearRect(0, 0, mW, mH);
                 bCtx.filter = 'blur(4px)';
                 bCtx.drawImage(rawMaskCanvas, 0, 0, mW, mH);
                 bCtx.filter = 'none';
 
-                // Paso 3: En el canvas temporal de persona (a resolución completa vW x vH del video),
-                // dibujamos el <video> original a todo color/brillo real y lo recortamos con 'destination-in'
+                // Paso 3: Recorte de la persona nítida en resolución completa vW x vH
                 const pCtx = personLayerCanvas.getContext('2d');
                 pCtx.globalCompositeOperation = 'source-over';
                 pCtx.clearRect(0, 0, vW, vH);
@@ -574,19 +599,16 @@ export default function App() {
                 hasSegCacheRef.current = true;
               }
             } catch (segErr) {
-              // Ignorar error transitorio de máscara
+              // Ignorar error transitorio
             }
           }
         }
 
         stepTrackedHandsFade(tState.trackedHands, now);
 
-        // === 2. COMPOSICIÓN EN 3 CAPAS EXACTAS (CAPA 1: FONDO -> CAPA 2: PERSONA 100% NÍTIDA -> CAPA 3: ELEMENTOS AR) ===
+        // === 2. COMPOSICIÓN EN 3 CAPAS EXACTAS ===
         if (manualBlackBg) {
-          // CAPA 1 (Fondo): Fondo negro profundo (#050505) + retícula de perspectiva naranja UNIFRANZ (#FF6B00)
           drawCyberBlackBackground(ctx, W, H, now);
-
-          // CAPA 2 (Persona 100% nítida y brillante): Misma orientación espejo scale(-1, 1) y tamaño que el video
           const sourceToDraw =
             hasSegCacheRef.current && personLayerCanvasRef.current
               ? personLayerCanvasRef.current
@@ -598,7 +620,6 @@ export default function App() {
           ctx.drawImage(sourceToDraw, W - drawX - drawW, drawY, drawW, drawH);
           ctx.restore();
         } else {
-          // Modo Real (Cámara directa en espejo con 0% procesamiento de segmentación)
           ctx.save();
           ctx.translate(W, 0);
           ctx.scale(-1, 1);
@@ -665,7 +686,6 @@ export default function App() {
             arr[18] = { x: hx + 0.03, y: hy - 0.03, z: 0 };
             arr[20] = { x: hx + 0.03, y: hy - 0.075, z: 0 };
           } else {
-            // 4 dedos extendidos hacia arriba (punta 8, 12, 16, 20 por encima de nudillo medio 6, 10, 14, 18)
             const tap = Math.sin(now * 0.022 + hx * 12) * 0.012;
             arr[6] = { x: hx - 0.025, y: hy - 0.03, z: 0 };
             arr[8] = { x: hx - 0.025, y: hy - 0.08 + tap, z: 0 };
@@ -679,7 +699,6 @@ export default function App() {
           return arr;
         };
 
-        // En modo POWERS simulamos 1 sola mano abierta para ver la Esfera IA; en KEYBOARD simulamos las 2 manos abiertas
         const simHandsList =
           sHandMode === 'POWERS'
             ? [makeSimHandByMode(c0 + 0.16 + handOsc, 0.48 + breath, 'POWERS')]
@@ -735,7 +754,7 @@ export default function App() {
         }
       }
 
-      // === 3D. MINIJUEGO AR "¿QUÉ MENCIÓN DE SISTEMAS ERES?" ===
+      // === 3D. MINIJUEGO AR "¿QUÉ MENCIÓN DE SISTEMAS ERES?" (CON AUDIO PROGRESIVO Y FANFARRIA) ===
       if (quizRef.current.active && persons.length > 0) {
         const player = persons[0];
         const qState = quizRef.current;
@@ -769,6 +788,11 @@ export default function App() {
 
           const fillProgress = clamp(qState.holdMs / AR_CONFIG.QUIZ_FILL_DURATION_MS, 0, 1);
 
+          // Sonido progresivo de carga mientras inclina la cabeza
+          if (detectedChoice && fillProgress > 0.05 && fillProgress < 0.98) {
+            soundEngine.playQuizChargeTick(fillProgress);
+          }
+
           drawHeadTiltQuizHUD(
             ctx,
             player,
@@ -793,6 +817,7 @@ export default function App() {
             qState.questionIdx += 1;
 
             if (qState.questionIdx < SIS_QUIZ_QUESTIONS.length) {
+              soundEngine.playQuizAnswerConfirm();
               triggerEnergyShockwave(
                 player.vrCenterX / W,
                 player.vrCenterY / H,
@@ -810,6 +835,8 @@ export default function App() {
               setActiveMention(winnerKey);
               setQuizUiState({ active: false, winner: winnerKey });
 
+              // Fanfarria electrónica épica de 3 notas + explosión de logos
+              soundEngine.playQuizVictoryFanfare();
               spawnTechStackParticles(player.shoulderCenterX, player.shoulderCenterY, 16, true);
               triggerEnergyShockwave(
                 player.shoulderCenterX / W,
@@ -843,7 +870,7 @@ export default function App() {
         }
       }
 
-      // === 5. GESTOS INFALIBLES DE MANOS: 🖐️🖐️ 2 MANOS ABIERTAS = TECLADO | ✊✊ 2 PUÑOS = MANDO PS5 | 🖐️ 1 MANO = PODER MENCIÓN ===
+      // === 5. GESTOS INFALIBLES DE MANOS + EFECTOS DE SONIDO SCI-FI EN TIEMPO REAL ===
       const trackedHands = tState.trackedHands;
       const handsByPersonId = new Map();
 
@@ -872,16 +899,58 @@ export default function App() {
       }
 
       let anyKeyboardActive = forceKeyboard;
+      let anyConsoleActiveThisFrame = false;
+      let anyRightShieldActiveThisFrame = false;
 
       handsByPersonId.forEach((hands, ownerId) => {
         const person = persons.find((p) => p.id === ownerId) || persons[0];
         if (!person) return;
 
-        // A. GESTO INFALIBLE 1: ✊✊ AMBOS PUÑOS CERRADOS -> MANDO GAMING PLAYSTATION DUALSENSE
+        // A. FUSIÓN DE MANOS (Juntar ambas manos -> Onda expansiva Bass Drop / Power Surge)
+        if (hands.length >= 2) {
+          const h1 = hands[0];
+          const h2 = hands[1];
+          const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+          const fuseThreshold = Math.max(115, person.shoulderWidth * 0.65);
+
+          if (handDist < fuseThreshold) {
+            const coreX = (h1.x + h2.x) / 2;
+            const coreY = (h1.y + h2.y) / 2;
+            const coreAlpha = Math.min(h1.alpha, h2.alpha);
+
+            drawDigitalFusionCore(
+              ctx,
+              coreX,
+              coreY,
+              Math.max(64, person.shoulderWidth * 0.36),
+              now,
+              coreAlpha
+            );
+
+            if (now - tState.lastFusionTriggerTs > 1800) {
+              tState.lastFusionTriggerTs = now;
+              soundEngine.playTechExplosionSurge();
+              triggerEnergyShockwave(
+                coreX / W,
+                coreY / H,
+                `⚡ ${OFFICIAL_MENTIONS.IA}  •  ${OFFICIAL_MENTIONS.CIBER}`
+              );
+              spawnTechStackParticles(coreX, coreY, 12, true);
+            }
+            return;
+          }
+        }
+
+        // B. GESTO INFALIBLE 1: ✊✊ AMBOS PUÑOS CERRADOS -> MANDOS GAMING PLAYSTATION + CHIME DE CONSOLA + PARTÍCULAS (△ ○ ✕ □)
         const bothFistsClosed =
           hands.length >= 2 && hands.every((h) => h.gesture === 'FIST');
 
         if (bothFistsClosed) {
+          anyConsoleActiveThisFrame = true;
+          if (!tState.wasConsoleActive) {
+            soundEngine.playConsoleStartupChime();
+          }
+
           const ctrlX = (hands[0].x + hands[1].x) / 2;
           const ctrlY = (hands[0].y + hands[1].y) / 2;
           const ctrlTilt =
@@ -900,19 +969,31 @@ export default function App() {
             true,
             Math.min(hands[0].alpha, hands[1].alpha)
           );
+
+          // Disparar símbolos PlayStation (△ ○ ✕ □) con destellos sonoros Arcade Pop
+          if (Math.random() < 0.25) {
+            spawnPlayStationSymbolParticle(ctrlX, ctrlY);
+          }
           return;
         }
 
-        // B. GESTO INFALIBLE 2: 🖐️🖐️ DOS MANOS ABIERTAS AL FRENTE (4 dedos extendidos en cada mano) -> TECLADO HOLOGRÁFICO + TERMINAL
+        // C. GESTO INFALIBLE 2: 🖐️🖐️ DOS MANOS ABIERTAS AL FRENTE -> TECLADO HOLOGRÁFICO + SONIDO DE DESPLIEGUE Y TECLEO
         const twoOpenEval = evaluateFoolproofTwoOpenHands(hands);
         if (twoOpenEval.isTwoOpenHands || forceKeyboard) {
           anyKeyboardActive = true;
+          if (!tState.wasKeyboardVisible) {
+            soundEngine.playKeyboardDeploy();
+          }
           tState.lastValidTypingTs = now;
           tState.keyboardAlpha = Math.min(1, tState.keyboardAlpha + 0.25);
 
-          // Escribir código en vivo en la mini-terminal conforme mueve los dedos
           const speedBoost = twoOpenEval.motionSpeed > 1.2 ? 0.55 : 0.18;
           tState.terminalCharsTyped += speedBoost;
+
+          // Si mueve los dedos sobre el teclado, dispara el sonido mecánico/digital de tecla futurista
+          if (twoOpenEval.motionSpeed > 0.9) {
+            soundEngine.playCyberKeystroke();
+          }
         }
 
         if (tState.keyboardAlpha > 0.02) {
@@ -940,15 +1021,20 @@ export default function App() {
             tState.keyboardAlpha,
             () => {
               tState.terminalCharsTyped += 0.35;
+              soundEngine.playCyberKeystroke();
             }
           );
         }
 
         if (twoOpenEval.isTwoOpenHands) return;
 
-        // C. GESTO 3: 🖐️ UNA MANO ABIERTA (Izquierda = Inteligencia Artificial y Ciencia de Datos | Derecha = Ciberseguridad y Blockchain)
+        // D. GESTO 3: 🖐️ UNA MANO ABIERTA (Izq = IA + Zumbido Neuronal | Der = Ciberseguridad + Escudo Metálico | Rock 🤘 = Explosión Stack)
         hands.forEach((h, hIdx) => {
           if (h.gesture === 'FIST') {
+            anyConsoleActiveThisFrame = true;
+            if (!tState.wasConsoleActive) {
+              soundEngine.playConsoleStartupChime();
+            }
             drawProceduralDualSenseController(
               ctx,
               h.x,
@@ -959,13 +1045,21 @@ export default function App() {
               true,
               h.alpha
             );
+            if (Math.random() < 0.22) {
+              spawnPlayStationSymbolParticle(h.x, h.y - 16);
+            }
           } else if (h.isOpenHand4Fingers || h.gesture === 'ROCK' || h.gesture === 'OPEN_PALM') {
-            const emitProb = h.gesture === 'ROCK' ? 0.45 : 0.24;
+            if (h.gesture === 'ROCK') {
+              soundEngine.playTechExplosionSurge();
+            }
+            const emitProb = h.gesture === 'ROCK' ? 0.48 : 0.24;
             if (Math.random() < emitProb) {
               spawnTechStackParticles(h.x, h.y - 24, 1, false);
             }
 
             if (h.anatomicalSide === 'LEFT_HAND') {
+              // Sonido armónico de red neuronal / sinapsis digital (con cooldown controlado)
+              soundEngine.playAiNeuralPulse();
               const oculusTarget = person.hasVr
                 ? { x: person.vrCenterX, y: person.vrCenterY }
                 : null;
@@ -979,6 +1073,11 @@ export default function App() {
                 oculusTarget
               );
             } else {
+              // Sonido metálico/energético grave de activación de escudo de ciberseguridad
+              anyRightShieldActiveThisFrame = true;
+              if (!tState.wasRightShieldActive) {
+                soundEngine.playCyberShieldLock();
+              }
               drawCybersecurityHandShield(
                 ctx,
                 h.x,
@@ -992,8 +1091,11 @@ export default function App() {
         });
       });
 
-      // Si el usuario activó el botón manual "⌨️ Teclado Holográfico" incluso sin manos en pantalla, mostrarlo frente a la persona
+      // Si el usuario activó el botón manual "⌨️ Teclado Holográfico" sin manos en pantalla
       if (forceKeyboard && persons.length > 0 && trackedHands.length === 0) {
+        if (!tState.wasKeyboardVisible) {
+          soundEngine.playKeyboardDeploy();
+        }
         tState.lastValidTypingTs = now;
         tState.keyboardAlpha = 1;
         tState.terminalCharsTyped += 0.22;
@@ -1010,11 +1112,19 @@ export default function App() {
             },
           ],
           tState.terminalCharsTyped,
-          1
+          1,
+          () => {
+            soundEngine.playCyberKeystroke();
+          }
         );
       }
 
-      // Desvanecer el teclado suavemente en 0.3s cuando baja las manos y el botón manual no está activo
+      // Actualizar banderas de estado para sonidos de transición
+      tState.wasKeyboardVisible = anyKeyboardActive;
+      tState.wasConsoleActive = anyConsoleActiveThisFrame;
+      tState.wasRightShieldActive = anyRightShieldActiveThisFrame;
+
+      // Desvanecer el teclado suavemente en 0.3s cuando baja las manos
       if (!anyKeyboardActive && tState.keyboardAlpha > 0) {
         const elapsedSinceTyping = now - tState.lastValidTypingTs;
         tState.keyboardAlpha = clamp(
@@ -1024,7 +1134,7 @@ export default function App() {
         );
       }
 
-      // === 6. RENDERIZAR PARTÍCULAS DE LOGOS DE TECNOLOGÍAS (COLORES OFICIALES PRE-CACHEADOS) ===
+      // === 6. RENDERIZAR PARTÍCULAS DE LOGOS TECH Y SÍMBOLOS PLAYSTATION (△ ○ ✕ □) ===
       if (tState.techParticles.length > 0) {
         for (let i = tState.techParticles.length - 1; i >= 0; i--) {
           const tp = tState.techParticles[i];
@@ -1044,6 +1154,30 @@ export default function App() {
           ctx.drawImage(sprite, tp.x - tp.size / 2, tp.y - tp.size / 2, tp.size, tp.size);
           ctx.restore();
         }
+      }
+
+      if (tState.psSymbolParticles.length > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = tState.psSymbolParticles.length - 1; i >= 0; i--) {
+          const sp = tState.psSymbolParticles[i];
+          sp.x += sp.vx;
+          sp.y += sp.vy;
+          sp.alpha -= 0.022;
+
+          if (sp.alpha <= 0.03 || sp.x < -50 || sp.x > W + 50 || sp.y < -50 || sp.y > H + 50) {
+            tState.psSymbolParticles.splice(i, 1);
+            continue;
+          }
+
+          ctx.globalAlpha = sp.alpha;
+          ctx.fillStyle = sp.color;
+          ctx.font = `900 ${Math.round(sp.size)}px "Orbitron", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(sp.sym, sp.x, sp.y);
+        }
+        ctx.restore();
       }
 
       // === 7. ONDAS DE CHOQUE (SHOCKWAVES NARANJA NEÓN) ===
@@ -1071,7 +1205,12 @@ export default function App() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isReady, triggerEnergyShockwave, spawnTechStackParticles]);
+  }, [
+    isReady,
+    triggerEnergyShockwave,
+    spawnTechStackParticles,
+    spawnPlayStationSymbolParticle,
+  ]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0A0A0A] select-none">
@@ -1130,11 +1269,12 @@ export default function App() {
 
           {/* Selector de Mención Oficial en el Encabezado */}
           <button
-            onClick={() =>
+            onClick={() => {
+              soundEngine.playUiClick();
               setActiveMention((prev) =>
                 prev === null ? 'IA' : prev === 'IA' ? 'CIBER' : null
-              )
-            }
+              );
+            }}
             className="glass-panel hover:border-[#FF6B00] px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 text-white transition"
             title="Alternar Mención Oficial en Órbita"
           >
@@ -1151,7 +1291,8 @@ export default function App() {
           {isSimulationMode && (
             <>
               <button
-                onClick={() =>
+                onClick={() => {
+                  soundEngine.playUiClick();
                   setSimHandMode((prev) =>
                     prev === 'POWERS'
                       ? 'KEYBOARD'
@@ -1160,8 +1301,8 @@ export default function App() {
                       : prev === 'GAMING'
                       ? 'ROCK'
                       : 'POWERS'
-                  )
-                }
+                  );
+                }}
                 className="px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border glass-panel text-[#FF6B00] border-[#FF6B00]/60"
                 title="Alternar gestos en Simulación (POWERS 1 Mano -> KEYBOARD 2 Manos Abiertas -> GAMING 2 Puños -> ROCK)"
               >
@@ -1170,7 +1311,10 @@ export default function App() {
               </button>
 
               <button
-                onClick={() => setSimTwoPersons((prev) => !prev)}
+                onClick={() => {
+                  soundEngine.playUiClick();
+                  setSimTwoPersons((prev) => !prev);
+                }}
                 className={`px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
                   simTwoPersons
                     ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
@@ -1205,15 +1349,16 @@ export default function App() {
         </div>
       </header>
 
-      {/* Panel Inferior: Visor Facial | Teclado Manual & Fondo Negro Manual | Guía Clara de los 4 Gestos */}
+      {/* Panel Inferior: Visor Facial | Teclado Manual, Fondo Negro Manual y Sonido ON/Mute | Guía Clara de los 4 Gestos */}
       <footer className="fixed bottom-0 inset-x-0 z-20 p-3 md:p-4 flex flex-col items-center pointer-events-none">
-        <div className="pointer-events-auto max-w-[1440px] w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
+        <div className="pointer-events-auto max-w-[1460px] w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
           {/* Grupo Izquierdo: Visor Facial + Órbita Tech */}
           <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/45 p-1.5 rounded-2xl border border-white/10">
             {ACCESSORY_MODES.map((m, idx) => (
               <button
                 key={m.id}
                 onClick={() => {
+                  soundEngine.playUiClick();
                   setAccessoryModeIdx(idx);
                   showBanner(`MODO ACTIVO: ${m.label.toUpperCase()}`);
                 }}
@@ -1232,13 +1377,14 @@ export default function App() {
             ))}
 
             <button
-              onClick={() =>
+              onClick={() => {
+                soundEngine.playUiClick();
                 setOrbitEnabled((prev) => {
                   const next = !prev;
                   showBanner(next ? '✨ ÓRBITA TECH ACTIVADA' : 'ÓRBITA TECH OCULTA');
                   return next;
-                })
-              }
+                });
+              }}
               aria-pressed={orbitEnabled}
               className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
                 orbitEnabled
@@ -1252,10 +1398,11 @@ export default function App() {
             </button>
           </div>
 
-          {/* Grupo Central: Botones Manuales [ ⌨️ Teclado Holográfico ] y [ ⬛ Fondo Negro / Modo Real ] */}
+          {/* Grupo Central: Botones Manuales [ ⌨️ Teclado Holográfico ], [ ⬛ Fondo Negro / Modo Real ] y [ 🔊 Sonido ON / 🔇 Mute ] */}
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
-              onClick={() =>
+              onClick={() => {
+                soundEngine.playUiClick();
                 setManualKeyboardEnabled((prev) => {
                   const next = !prev;
                   showBanner(
@@ -1264,8 +1411,8 @@ export default function App() {
                       : '🖐️🖐️ TECLADO EN MODO GESTO (DOS MANOS ABIERTAS)'
                   );
                   return next;
-                })
-              }
+                });
+              }}
               aria-pressed={manualKeyboardEnabled}
               className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
                 manualKeyboardEnabled
@@ -1279,7 +1426,8 @@ export default function App() {
             </button>
 
             <button
-              onClick={() =>
+              onClick={() => {
+                soundEngine.playUiClick();
                 setBlackBgEnabled((prev) => {
                   const next = !prev;
                   showBanner(
@@ -1288,8 +1436,8 @@ export default function App() {
                       : '🎥 MODO REAL (CÁMARA DIRECTA SIN SEGMENTACIÓN) ACTIVADO'
                   );
                   return next;
-                })
-              }
+                });
+              }}
               aria-pressed={blackBgEnabled}
               className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
                 blackBgEnabled
@@ -1300,6 +1448,39 @@ export default function App() {
             >
               <Square className="w-3.5 h-3.5 fill-current" />
               <span>⬛ Fondo Negro / Modo Real</span>
+            </button>
+
+            <button
+              onClick={() => {
+                const nextMuted = !soundMuted;
+                soundEngine.setMuted(nextMuted);
+                setSoundMuted(nextMuted);
+                if (!nextMuted) {
+                  soundEngine.playUiClick();
+                  showBanner('🔊 SISTEMA DE SONIDO FUTURISTA ACTIVADO');
+                } else {
+                  showBanner('🔇 SONIDO SILENCIADO (MUTE)');
+                }
+              }}
+              aria-pressed={!soundMuted}
+              className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
+                !soundMuted
+                  ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                  : 'bg-black/80 hover:bg-black text-white/75 border-white/25'
+              }`}
+              title="Activar o silenciar los efectos de sonido Sci-Fi en tiempo real"
+            >
+              {!soundMuted ? (
+                <>
+                  <Volume2 className="w-4 h-4" />
+                  <span>🔊 Sonido ON</span>
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-4 h-4 text-[#FF6B00]" />
+                  <span>🔇 Mute</span>
+                </>
+              )}
             </button>
           </div>
 
