@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #0A0A0A;
+    color: #FFFFFF;
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+}
+
+/* Custom animations and glassmorphism utilities */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 18px rgba(255, 107, 0, 0.55), 0 0 36px rgba(255, 85, 0, 0.28), inset 0 0 12px rgba(255, 107, 0, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(255, 107, 0, 0.9), 0 0 55px rgba(255, 85, 0, 0.5), inset 0 0 18px rgba(255, 107, 0, 0.45);
+  }
+}
+
+@keyframes scanline-vertical {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
+}
+
+@keyframes float-slow {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2.4s infinite ease-in-out;
+}
+
+.animate-float-slow {
+  animation: float-slow 3.5s infinite ease-in-out;
+}
+
+.glass-panel {
+  background: linear-gradient(135deg, rgba(18, 18, 18, 0.82) 0%, rgba(10, 10, 10, 0.92) 100%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 107, 0, 0.35);
+}
+
+.glass-panel-bright {
+  background: linear-gradient(135deg, rgba(25, 18, 12, 0.88) 0%, rgba(12, 12, 12, 0.94) 100%);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 107, 0, 0.65);
+  box-shadow: 0 0 25px rgba(255, 107, 0, 0.25);
+}
+
+.crt-grid-overlay {
+  background-image: 
+    linear-gradient(rgba(255, 107, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 107, 0, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
