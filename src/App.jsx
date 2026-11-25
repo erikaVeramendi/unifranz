@@ -10,7 +10,6 @@ import {
   AR_CONFIG,
   ACCESSORY_MODES,
   SISTEMAS_CAREER,
-  ASSETS_PATHS,
   SIS_QUIZ_QUESTIONS,
 } from './config';
 import {
@@ -30,7 +29,6 @@ import {
   drawQuizResultEffects,
   drawMetaverseTronGrid,
   drawSynergyConnectionBeam,
-  detectSmileFromFace,
 } from './utils/arHelpers';
 import {
   extractValidPoses,
@@ -41,14 +39,11 @@ import {
   stepTrackedHandsFade,
 } from './utils/personTracker';
 import LoadingScreen from './components/LoadingScreen';
-import PhotoModal from './components/PhotoModal';
 import UnifranzLogo from './components/UnifranzLogo';
 import {
-  Camera,
   Code2,
   Glasses,
   Sparkles,
-  RefreshCw,
   Users,
   Layers,
   Crown,
@@ -59,7 +54,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  // === 100% Ingeniería de Sistemas e Innovación Digital (Cero PNGs de poleras o lentes) ===
+  // === 100% Ingeniería de Sistemas e Innovación Digital (Sin tarjeta cuadrada ni captura de fotos) ===
   // Índice de Modo de Accesorio: 0 = Visor Oculus Blanco, 1 = Corona UNIFRANZ, 2 = Ambos, 3 = Modo Hacker HUD
   const [accessoryModeIdx, setAccessoryModeIdx] = useState(0);
   const [hudEnabled, setHudEnabled] = useState(true);
@@ -74,7 +69,7 @@ export default function App() {
     winner: null, // null | 'IA' | 'CIBERSEGURIDAD'
   });
 
-  // Estados de carga y modal
+  // Estados de carga
   const [loadingProgress, setLoadingProgress] = useState(10);
   const [loadingStatus, setLoadingStatus] = useState(
     'Inicializando motor neuronal MediaPipe GPU...'
@@ -85,9 +80,6 @@ export default function App() {
 
   // Feedback de interfaz
   const [gestureBanner, setGestureBanner] = useState(null);
-  const [countdown, setCountdown] = useState(null);
-  const [flashActive, setFlashActive] = useState(false);
-  const [capturedPhoto, setCapturedPhoto] = useState(null);
 
   // Refs de DOM y Canvas
   const videoRef = useRef(null);
@@ -112,7 +104,6 @@ export default function App() {
     isSimulationMode: false,
     simTwoPersons: false,
     simHandMode: 'POWERS',
-    countdownActive: false,
   });
 
   useEffect(() => {
@@ -123,7 +114,6 @@ export default function App() {
     stateRef.current.isSimulationMode = isSimulationMode;
     stateRef.current.simTwoPersons = simTwoPersons;
     stateRef.current.simHandMode = simHandMode;
-    stateRef.current.countdownActive = countdown !== null;
   }, [
     accessoryModeIdx,
     hudEnabled,
@@ -132,7 +122,6 @@ export default function App() {
     isSimulationMode,
     simTwoPersons,
     simHandMode,
-    countdown,
   ]);
 
   // Estado del Minijuego en Ref para actualización a 60 FPS
@@ -156,22 +145,15 @@ export default function App() {
     segmenter: null,
   });
 
-  // Solo se precarga el logo oficial de UNIFRANZ (los lentes, mandos, corona y teclado son 100% código)
-  const assetsRef = useRef({
-    logoImg: null,
-  });
-
   // Estado de seguimiento multi-persona, manos, partículas y temporizador Tron de 4s
   const trackingRef = useRef({
     trackedPersons: [],
     trackedHands: [],
     proximity: 0.25,
-    tronFusionUntilTs: 0, // Marca de tiempo hasta la cual la Matriz Tron de 4s permanece activa
+    tronFusionUntilTs: 0,
     lastFusionTriggerTs: 0,
     lastAccessorySwitchTs: 0,
     peaceHoldFrames: 0,
-    lastPhotoTriggerTime: 0,
-    smileHoldFrames: 0,
     shockwaves: [],
     particles: [],
     burstParticles: [],
@@ -216,144 +198,116 @@ export default function App() {
     };
   }, []);
 
-  // Precargar logo oficial UNIFRANZ
-  const preloadAssets = useCallback(async () => {
-    const loadImg = (src, fallbackSrc = null) =>
-      new Promise((resolve) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => resolve(img);
-        img.onerror = () => {
-          if (fallbackSrc) {
-            const fb = new Image();
-            fb.crossOrigin = 'anonymous';
-            fb.onload = () => resolve(fb);
-            fb.onerror = () => resolve(null);
-            fb.src = fallbackSrc;
-          } else {
-            resolve(null);
-          }
-        };
-        img.src = src;
-      });
-
-    assetsRef.current.logoImg = await loadImg(ASSETS_PATHS.logoPng, ASSETS_PATHS.logoSvg);
-  }, []);
-
   // Inicializar cámara y modelos MediaPipe GPU
-  const initExperience = useCallback(
-    async (useSimulation = false) => {
-      setCameraError(null);
-      setLoadingProgress(15);
-      setLoadingStatus('Inicializando motores vectoriales Oculus Quest, DualSense & IA...');
-      await preloadAssets();
+  const initExperience = useCallback(async (useSimulation = false) => {
+    setCameraError(null);
+    setLoadingProgress(20);
+    setLoadingStatus('Inicializando motores vectoriales Oculus Quest, DualSense & IA...');
 
-      setLoadingProgress(35);
-      setLoadingStatus('Solicitando acceso a cámara...');
+    setLoadingProgress(40);
+    setLoadingStatus('Solicitando acceso a cámara...');
 
-      if (!useSimulation) {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              facingMode: 'user',
-              frameRate: { ideal: 30 },
-            },
-            audio: false,
-          });
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play();
-          }
-        } catch (err) {
-          setCameraError(
-            'No se detectó una cámara disponible o el permiso fue denegado. Puedes reintentar o activar el Modo Simulación Holográfica.'
-          );
-          return;
-        }
-      } else {
-        setIsSimulationMode(true);
-      }
-
-      setLoadingProgress(60);
-      setLoadingStatus('Cargando MediaPipe Pose, Face, Hand & ImageSegmenter (GPU)...');
-
+    if (!useSimulation) {
       try {
-        const vision = await FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
-        );
-
-        setLoadingProgress(75);
-        const [poseLandmarker, faceLandmarker, handLandmarker] = await Promise.all([
-          PoseLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-              delegate: 'GPU',
-            },
-            runningMode: 'VIDEO',
-            numPoses: AR_CONFIG.MAX_PERSONS,
-            minPoseDetectionConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
-            minPosePresenceConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
-            minTrackingConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
-          }),
-          FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-              delegate: 'GPU',
-            },
-            runningMode: 'VIDEO',
-            numFaces: AR_CONFIG.MAX_PERSONS,
-            minFaceDetectionConfidence: AR_CONFIG.FACE_DETECTION_CONFIDENCE,
-            minFacePresenceConfidence: AR_CONFIG.FACE_PRESENCE_CONFIDENCE,
-            minTrackingConfidence: AR_CONFIG.FACE_TRACKING_CONFIDENCE,
-            outputFaceBlendshapes: true,
-          }),
-          HandLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-              delegate: 'GPU',
-            },
-            runningMode: 'VIDEO',
-            numHands: AR_CONFIG.MAX_HANDS,
-          }),
-        ]);
-
-        let imageSegmenter = null;
-        try {
-          imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
-              delegate: 'GPU',
-            },
-            runningMode: 'VIDEO',
-            outputCategoryMask: false,
-            outputConfidenceMasks: true,
-          });
-        } catch (segErr) {
-          console.warn('ImageSegmenter opcional no disponible:', segErr);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user',
+            frameRate: { ideal: 30 },
+          },
+          audio: false,
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
         }
+      } catch (err) {
+        setCameraError(
+          'No se detectó una cámara disponible o el permiso fue denegado. Puedes reintentar o activar el Modo Simulación Holográfica.'
+        );
+        return;
+      }
+    } else {
+      setIsSimulationMode(true);
+    }
 
-        landmarkersRef.current = {
-          pose: poseLandmarker,
-          face: faceLandmarker,
-          hand: handLandmarker,
-          segmenter: imageSegmenter,
-        };
-      } catch (visionErr) {
-        console.warn('Error inicializando MediaPipe:', visionErr);
+    setLoadingProgress(65);
+    setLoadingStatus('Cargando MediaPipe Pose, Face, Hand & ImageSegmenter (GPU)...');
+
+    try {
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm'
+      );
+
+      setLoadingProgress(80);
+      const [poseLandmarker, faceLandmarker, handLandmarker] = await Promise.all([
+        PoseLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numPoses: AR_CONFIG.MAX_PERSONS,
+          minPoseDetectionConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
+          minPosePresenceConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
+          minTrackingConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
+        }),
+        FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: AR_CONFIG.MAX_PERSONS,
+          minFaceDetectionConfidence: AR_CONFIG.FACE_DETECTION_CONFIDENCE,
+          minFacePresenceConfidence: AR_CONFIG.FACE_PRESENCE_CONFIDENCE,
+          minTrackingConfidence: AR_CONFIG.FACE_TRACKING_CONFIDENCE,
+          outputFaceBlendshapes: false,
+        }),
+        HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numHands: AR_CONFIG.MAX_HANDS,
+        }),
+      ]);
+
+      let imageSegmenter = null;
+      try {
+        imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          outputCategoryMask: false,
+          outputConfidenceMasks: true,
+        });
+      } catch (segErr) {
+        console.warn('ImageSegmenter opcional no disponible:', segErr);
       }
 
-      setLoadingProgress(100);
-      setLoadingStatus('¡Espejo AR Ingeniería de Sistemas • Nueva Malla 2026 Listo!');
-      setTimeout(() => setIsReady(true), 250);
-    },
-    [preloadAssets]
-  );
+      landmarkersRef.current = {
+        pose: poseLandmarker,
+        face: faceLandmarker,
+        hand: handLandmarker,
+        segmenter: imageSegmenter,
+      };
+    } catch (visionErr) {
+      console.warn('Error inicializando MediaPipe:', visionErr);
+    }
+
+    setLoadingProgress(100);
+    setLoadingStatus('¡Espejo AR Ingeniería de Sistemas • Nueva Malla 2026 Listo!');
+    setTimeout(() => setIsReady(true), 250);
+  }, []);
 
   useEffect(() => {
     initExperience(false);
@@ -421,190 +375,6 @@ export default function App() {
       });
     },
     [triggerEnergyShockwave]
-  );
-
-  // Girar ruleta de rol profesional de Ingeniería de Sistemas
-  const spinRoleRoulette = useCallback(() => {
-    const now = performance.now();
-    trackingRef.current.trackedPersons.forEach((p) => {
-      p.rouletteStartTime = now;
-      p.scanStartTime = now;
-      p.roleIndex = (p.roleIndex + 1 + Math.floor(Math.random() * 3)) % 4;
-    });
-    triggerEnergyShockwave(0.5, 0.35, '🎰 RULETA HOLOGRÁFICA: NUEVO ROL DE SISTEMAS ASIGNADO');
-  }, [triggerEnergyShockwave]);
-
-  // Capturar Foto Souvenir bajo el sello #NuevaMallaSistemas #Unifranz
-  const captureCommemorativePhoto = useCallback(() => {
-    const mainCanvas = canvasRef.current;
-    if (!mainCanvas) return;
-
-    setFlashActive(true);
-    setTimeout(() => setFlashActive(false), 320);
-
-    const outCanvas = document.createElement('canvas');
-    const W = 1280;
-    const H = 960;
-    outCanvas.width = W;
-    outCanvas.height = H;
-    const ctx = outCanvas.getContext('2d');
-
-    ctx.fillStyle = '#0A0A0A';
-    ctx.fillRect(0, 0, W, H);
-
-    const photoAreaH = H - 150;
-    const srcRatio = mainCanvas.width / mainCanvas.height;
-    const dstRatio = W / photoAreaH;
-    let drawW = W;
-    let drawH = photoAreaH;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    if (srcRatio > dstRatio) {
-      drawH = photoAreaH;
-      drawW = drawH * srcRatio;
-      offsetX = (W - drawW) / 2;
-    } else {
-      drawW = W;
-      drawH = drawW / srcRatio;
-      offsetY = (photoAreaH - drawH) / 2;
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(18, 18, W - 36, photoAreaH - 18);
-    ctx.clip();
-    ctx.drawImage(mainCanvas, offsetX, offsetY, drawW, drawH);
-    ctx.restore();
-
-    ctx.strokeStyle = '#FF6B00';
-    ctx.lineWidth = 5;
-    ctx.strokeRect(18, 18, W - 36, H - 36);
-
-    const quizWinner = quizRef.current.winner;
-    const mentionStamp = quizWinner
-      ? quizWinner === 'IA'
-        ? 'MENCIÓN: INTELIGENCIA ARTIFICIAL'
-        : 'MENCIÓN: CIBERSEGURIDAD'
-      : 'NUEVA MALLA CURRICULAR 2026';
-
-    // Sello Superior Izquierdo (Resultado del Test AR o Nueva Malla Curricular)
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
-    ctx.fillRect(36, 36, 400, 46);
-    ctx.strokeStyle = '#FF6B00';
-    ctx.lineWidth = 2.2;
-    ctx.strokeRect(36, 36, 400, 46);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = '800 14px "Orbitron", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`🏆 ${mentionStamp}`, 236, 64);
-
-    // Sello Superior Derecho (#NuevaMallaSistemas #Unifranz)
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
-    ctx.fillRect(W - 385, 36, 345, 46);
-    ctx.strokeStyle = '#FF6B00';
-    ctx.lineWidth = 2.2;
-    ctx.strokeRect(W - 385, 36, 345, 46);
-    ctx.fillStyle = '#FF6B00';
-    ctx.font = '800 14.5px "Orbitron", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('#NuevaMallaSistemas #Unifranz', W - 212, 65);
-
-    const footerY = H - 145;
-    const footerGrad = ctx.createLinearGradient(0, footerY, W, H);
-    footerGrad.addColorStop(0, '#0D0D0D');
-    footerGrad.addColorStop(0.5, '#16120E');
-    footerGrad.addColorStop(1, '#0A0A0A');
-    ctx.fillStyle = footerGrad;
-    ctx.fillRect(20, footerY, W - 40, 125);
-
-    ctx.fillStyle = '#FF6B00';
-    ctx.fillRect(20, footerY, W - 40, 4);
-
-    if (assetsRef.current.logoImg) {
-      ctx.drawImage(assetsRef.current.logoImg, 44, footerY + 24, 260, 62);
-    } else {
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = '900 36px "Orbitron", sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText('UNIFRANZ', 46, footerY + 68);
-    }
-
-    const firstPerson = trackingRef.current.trackedPersons[0];
-    const roleIdx = firstPerson ? firstPerson.roleIndex % SISTEMAS_CAREER.roles.length : 0;
-    const assignedRole =
-      quizWinner === 'IA'
-        ? 'Mención: Inteligencia Artificial'
-        : quizWinner === 'CIBERSEGURIDAD'
-        ? 'Mención: Ciberseguridad'
-        : SISTEMAS_CAREER.roles[roleIdx];
-
-    const nowStr = new Date().toLocaleDateString('es-BO', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#FF6B00';
-    ctx.font = '800 20px "Orbitron", sans-serif';
-    ctx.fillText(SISTEMAS_CAREER.fullName.toUpperCase(), W - 48, footerY + 46);
-
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = '700 15px "Space Grotesk", sans-serif';
-    ctx.fillText(
-      quizWinner
-        ? `${assignedRole.toUpperCase()} • LÍDER DEL FUTURO`
-        : `ROL DEL FUTURO: ${assignedRole.toUpperCase()}`,
-      W - 48,
-      footerY + 72
-    );
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.78)';
-    ctx.font = '600 13px "Space Grotesk", sans-serif';
-    ctx.fillText(
-      `UNIFRANZ AR MIRROR  •  ${nowStr}  •  #NuevaMallaSistemas #Unifranz`,
-      W - 48,
-      footerY + 98
-    );
-
-    const framedDataUrl = outCanvas.toDataURL('image/png', 0.92);
-    const qrUrl = `${window.location.origin}/?souvenir=UNIFRANZ-SIS&mencion=${encodeURIComponent(
-      assignedRole
-    )}&fecha=${encodeURIComponent(nowStr)}&tag=NuevaMallaSistemas`;
-
-    setCapturedPhoto({
-      framedDataUrl,
-      careerShort: SISTEMAS_CAREER.shortName,
-      careerLabel: `${SISTEMAS_CAREER.shortName} • ${assignedRole}`,
-      timestamp: nowStr,
-      sharePayload: qrUrl,
-    });
-  }, []);
-
-  // Temporizador 3... 2... 1...
-  const startPhotoCountdown = useCallback(
-    (reasonText = '📸 INICIANDO CAPTURA SOUVENIR') => {
-      if (stateRef.current.countdownActive) return;
-      setGestureBanner(reasonText);
-      setCountdown(3);
-
-      let current = 3;
-      const timer = setInterval(() => {
-        current -= 1;
-        if (current > 0) {
-          setCountdown(current);
-        } else {
-          clearInterval(timer);
-          setCountdown(null);
-          setGestureBanner(null);
-          captureCommemorativePhoto();
-        }
-      }, 900);
-    },
-    [captureCommemorativePhoto]
   );
 
   // Iniciar el Minijuego Interactivo "¿Qué Mención de Sistemas eres?" (IA vs. Ciberseguridad)
@@ -679,7 +449,6 @@ export default function App() {
       } = stateRef.current;
 
       const currentAccessory = ACCESSORY_MODES[accIdx] || ACCESSORY_MODES[0];
-      // La Matriz Tron está activa si el usuario la activó manualmente o durante los 4 segundos posteriores a la Fusión de Manos
       const isTronMatrixActive = manualTronBg || now < tState.tronFusionUntilTs;
 
       let drawX = 0;
@@ -947,12 +716,10 @@ export default function App() {
           arr[17] = { x: hx + 0.03, y: hy + 0.005, z: 0 };
 
           if (modeType === 'GAMING') {
-            // Puño cerrado ('FIST') para activar Mandos PlayStation DualSense
             [8, 6, 12, 10, 16, 14, 20, 18].forEach((k) => {
               arr[k] = { x: hx, y: hy + 0.02, z: 0 };
             });
           } else if (modeType === 'KEYBOARD') {
-            // Dedos extendidos hacia abajo ('TYPING') para activar Teclado Holográfico
             arr[6] = { x: hx - 0.025, y: hy + 0.02, z: 0 };
             arr[8] = { x: hx - 0.025, y: hy + 0.08, z: 0 };
             arr[10] = { x: hx, y: hy + 0.02, z: 0 };
@@ -962,7 +729,6 @@ export default function App() {
             arr[18] = { x: hx + 0.03, y: hy + 0.02, z: 0 };
             arr[20] = { x: hx + 0.03, y: hy + 0.075, z: 0 };
           } else {
-            // Mano abierta hacia arriba ('OPEN_PALM') para Esfera IA y Escudo Ciberseguridad
             arr[6] = { x: hx - 0.025, y: hy - 0.03, z: 0 };
             arr[8] = { x: hx - 0.025, y: hy - 0.08, z: 0 };
             arr[10] = { x: hx, y: hy - 0.03, z: 0 };
@@ -1011,7 +777,7 @@ export default function App() {
           drawSistemasOrbitalIcons(ctx, person, W, H, now + idx * 600);
         }
 
-        // 3B. Visor Oculus Quest Blanco Futurista (100% Procedural en Canvas 2D, sin correa superior)
+        // 3B. Visor Oculus Quest Blanco Futurista (100% Procedural en Canvas 2D)
         const shouldDrawOculus =
           currentAccessory.oculus || quizRef.current.winner !== null;
         if (shouldDrawOculus && person.hasVr) {
@@ -1046,133 +812,13 @@ export default function App() {
           );
         }
 
-        // 3E. Badge Monumental y Efectos Especiales del Minijuego (IA vs Ciberseguridad)
+        // 3E. Efectos Holográficos del Minijuego (IA vs Ciberseguridad)
         if (idx === 0 && quizRef.current.winner) {
           drawQuizResultEffects(ctx, person, quizRef.current.winner, W, H, now);
         }
-
-        // 3F. Tarjeta HUD Flotante y Ruleta de Rol Profesional de Sistemas
-        if (showHud && !quizRef.current.active) {
-          const elapsedScan = now - person.scanStartTime;
-          const isInitialScan = elapsedScan < 1400;
-
-          const boxLeft = person.shoulderCenterX - person.shoulderWidth * 0.9;
-          const boxRight = person.shoulderCenterX + person.shoulderWidth * 0.9;
-          const boxTop =
-            (person.hasVr
-              ? person.vrCenterY
-              : person.shoulderCenterY - person.shoulderWidth * 0.7) -
-            person.shoulderWidth * 0.42;
-          const boxBottom = person.shoulderCenterY + person.torsoHeight * 1.1;
-          const boxW = boxRight - boxLeft;
-          const boxH = boxBottom - boxTop;
-
-          ctx.save();
-          const cornerLen = Math.min(30, boxW * 0.15);
-          ctx.strokeStyle = isInitialScan ? '#FF6B00' : 'rgba(255, 107, 0, 0.55)';
-          ctx.lineWidth = isInitialScan ? 2.6 : 1.6;
-
-          ctx.beginPath();
-          ctx.moveTo(boxLeft, boxTop + cornerLen);
-          ctx.lineTo(boxLeft, boxTop);
-          ctx.lineTo(boxLeft + cornerLen, boxTop);
-          ctx.moveTo(boxRight - cornerLen, boxTop);
-          ctx.lineTo(boxRight, boxTop);
-          ctx.lineTo(boxRight, boxTop + cornerLen);
-          ctx.moveTo(boxLeft, boxBottom - cornerLen);
-          ctx.lineTo(boxLeft, boxBottom);
-          ctx.lineTo(boxLeft + cornerLen, boxBottom);
-          ctx.moveTo(boxRight - cornerLen, boxBottom);
-          ctx.lineTo(boxRight, boxBottom);
-          ctx.lineTo(boxRight, boxBottom - cornerLen);
-          ctx.stroke();
-
-          if (isInitialScan) {
-            const scanProgress = (elapsedScan % 1400) / 1400;
-            const scanY = boxTop + scanProgress * boxH;
-            ctx.fillStyle = 'rgba(255, 107, 0, 0.32)';
-            ctx.fillRect(boxLeft, scanY - 4, boxW, 6);
-          }
-          ctx.restore();
-
-          const rolesList = SISTEMAS_CAREER.roles;
-          const elapsedRoulette = now - person.rouletteStartTime;
-          const isSpinningRoulette = elapsedRoulette < 1400;
-          const currentRoleText =
-            idx === 0 && quizRef.current.winner
-              ? quizRef.current.winner === 'IA'
-                ? 'Mención: Inteligencia Artificial'
-                : 'Mención: Ciberseguridad'
-              : isSpinningRoulette
-              ? rolesList[Math.floor(elapsedRoulette / 95) % rolesList.length]
-              : rolesList[person.roleIndex % rolesList.length];
-
-          const cardW = Math.min(315, Math.max(225, W * 0.22));
-          const cardH = 104;
-          const rawCardX =
-            idx === 0 && persons.length > 1
-              ? person.shoulderCenterX - person.shoulderWidth * 0.78 - cardW
-              : person.shoulderCenterX + person.shoulderWidth * 0.72;
-          const cardX = clamp(rawCardX, 16, W - cardW - 16);
-          const cardY = clamp(
-            person.shoulderCenterY - person.shoulderWidth * 0.55,
-            84,
-            H - cardH - 135
-          );
-
-          ctx.save();
-          ctx.fillStyle = 'rgba(10, 10, 10, 0.86)';
-          ctx.strokeStyle = '#FF6B00';
-          ctx.lineWidth = 1.6;
-          ctx.beginPath();
-          ctx.roundRect(cardX, cardY, cardW, cardH, 10);
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.fillStyle = '#FF6B00';
-          ctx.beginPath();
-          ctx.roundRect(cardX, cardY, cardW, 22, [10, 10, 0, 0]);
-          ctx.fill();
-
-          ctx.fillStyle = '#0A0A0A';
-          ctx.font = '800 9.5px "Orbitron", sans-serif';
-          ctx.textAlign = 'left';
-          ctx.fillText(
-            `${SISTEMAS_CAREER.badge}${persons.length > 1 ? ` // P#${idx + 1}` : ''}`,
-            cardX + 10,
-            cardY + 14.5
-          );
-
-          ctx.fillStyle = '#FFFFFF';
-          ctx.font = '700 11.5px "Space Grotesk", sans-serif';
-          ctx.fillText(SISTEMAS_CAREER.profileTitle, cardX + 10, cardY + 42);
-
-          ctx.fillStyle = isSpinningRoulette
-            ? 'rgba(255, 107, 0, 0.25)'
-            : 'rgba(255, 107, 0, 0.14)';
-          ctx.strokeStyle = isSpinningRoulette ? '#FFFFFF' : 'rgba(255, 107, 0, 0.6)';
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.roundRect(cardX + 10, cardY + 50, cardW - 20, 28, 6);
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.fillStyle = isSpinningRoulette ? '#FFFFFF' : '#FF6B00';
-          ctx.font = '800 10.5px "Orbitron", sans-serif';
-          ctx.fillText(
-            isSpinningRoulette ? `🎰 ${currentRoleText.toUpperCase()}` : `★ ${currentRoleText}`,
-            cardX + 16,
-            cardY + 68
-          );
-
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-          ctx.font = '600 9px "Orbitron", monospace';
-          ctx.fillText('#NuevaMallaSistemas #Unifranz', cardX + 10, cardY + 94);
-          ctx.restore();
-        }
       }
 
-      // === 3G. LÓGICA Y RENDERIZADO DEL MINIJUEGO AR "¿IA O CIBERSEGURIDAD?" (CONTROLADO POR CABEZA) ===
+      // === 3F. LÓGICA Y RENDERIZADO DEL MINIJUEGO AR "¿IA O CIBERSEGURIDAD?" (CONTROLADO POR CABEZA) ===
       if (quizRef.current.active && persons.length > 0) {
         const player = persons[0];
         const qState = quizRef.current;
@@ -1241,7 +887,6 @@ export default function App() {
               qState.active = false;
               qState.winner = winnerKey;
 
-              // Activar modo "Ambos" (Visor Oculus Blanco + Corona UNIFRANZ)
               setAccessoryModeIdx(2);
               setQuizUiState({ active: false, winner: winnerKey });
 
@@ -1259,14 +904,6 @@ export default function App() {
                   ? '🏆 MENCIÓN ASIGNADA: INTELIGENCIA ARTIFICIAL + OCULUS & CORONA'
                   : '🏆 MENCIÓN ASIGNADA: CIBERSEGURIDAD + OCULUS & CORONA'
               );
-
-              setTimeout(() => {
-                startPhotoCountdown(
-                  winnerKey === 'IA'
-                    ? '👑 FOTO SOUVENIR: MENCIÓN INTELIGENCIA ARTIFICIAL'
-                    : '👑 FOTO SOUVENIR: MENCIÓN CIBERSEGURIDAD'
-                );
-              }, 1600);
             }
           }
         }
@@ -1307,7 +944,6 @@ export default function App() {
         }
         handsByPersonId.get(hand.ownerPersonId).push(hand);
 
-        // Nodos cibernéticos sutiles en articulaciones de la mano
         if (showHud && !hand.isMissing && hand.rawLandmarks) {
           ctx.save();
           ctx.globalAlpha = hand.alpha;
@@ -1336,7 +972,6 @@ export default function App() {
         }
       }
 
-      // Evaluar poderes por persona
       handsByPersonId.forEach((hands, ownerId) => {
         const person = persons.find((p) => p.id === ownerId) || persons[0];
         if (!person) return;
@@ -1364,7 +999,6 @@ export default function App() {
               coreAlpha
             );
 
-            // Activar Matriz Cibernética Tron durante 4 segundos con onda de choque
             tState.tronFusionUntilTs = now + AR_CONFIG.TRON_FUSION_DURATION_MS;
             if (now - tState.lastFusionTriggerTs > 2200) {
               tState.lastFusionTriggerTs = now;
@@ -1381,7 +1015,6 @@ export default function App() {
         if (isFused) return;
 
         // B. Comprobar Teclado Holográfico Flotante (Modo Hacker / Developer)
-        // Se activa si extiende ambas manos hacia adelante con palmas hacia abajo ('TYPING'), o si activó el botón Teclado / Modo Hacker HUD
         const bothHandsTyping =
           hands.length >= 2 &&
           hands.every(
@@ -1427,7 +1060,6 @@ export default function App() {
         // C. Poderes Individuales en cada Mano
         hands.forEach((h, hIdx) => {
           if (h.gesture === 'FIST') {
-            // Cerrar el puño / agarrar en el aire -> Mando de PlayStation DualSense Holográfico vibrando
             drawProceduralDualSenseController(
               ctx,
               h.x,
@@ -1439,7 +1071,6 @@ export default function App() {
               h.alpha
             );
 
-            // Disparar símbolos de PlayStation (△, ○, ✕, □) como partículas luminosas
             if (tState.burstParticles.length < 85 && Math.random() < 0.35) {
               const psSyms = ['△', '○', '✕', '□'];
               const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
@@ -1456,8 +1087,6 @@ export default function App() {
               });
             }
           } else if (!bothHandsTyping) {
-            // Mano Izquierda abierta -> Esfera de Inteligencia Artificial que lanza sinapsis al Visor Oculus
-            // Mano Derecha abierta -> Escudo Hexagonal de Ciberseguridad con Candado Digital
             if (h.anatomicalSide === 'LEFT_HAND') {
               const oculusTarget = person.hasVr
                 ? { x: person.vrCenterX, y: person.vrCenterY }
@@ -1485,7 +1114,6 @@ export default function App() {
         });
       });
 
-      // Si el usuario activó el botón de Teclado Holográfico sin manos detectadas aún, mostrarlo frente a la persona
       if (forceKeyboard && persons.length > 0 && trackedHands.length === 0) {
         const p0 = persons[0];
         drawHolographicKeyboard(
@@ -1574,26 +1202,7 @@ export default function App() {
         });
       }
 
-      // === 8. DETECCIÓN DE SONRISA PARA CAPTURAR FOTO ===
-      if (!sim && persons.length > 0 && !quizRef.current.active) {
-        const hasSmilingFace = persons.some(
-          (p) => p.hasFace && detectSmileFromFace(p.rawFaceLandmarks, p.faceBlendshapes)
-        );
-        if (hasSmilingFace) {
-          tState.smileHoldFrames++;
-          if (
-            tState.smileHoldFrames >= AR_CONFIG.SMILE_HOLD_FRAMES &&
-            now - tState.lastPhotoTriggerTime > AR_CONFIG.PHOTO_TRIGGER_COOLDOWN_MS &&
-            !stateRef.current.countdownActive
-          ) {
-            tState.lastPhotoTriggerTime = now;
-            tState.smileHoldFrames = 0;
-            startPhotoCountdown('😄 ¡SONRISA UNIFRANZ DETECTADA! CAPTURANDO...');
-          }
-        }
-      }
-
-      // === 9. ONDAS DE CHOQUE (SHOCKWAVES NARANJA NEÓN) ===
+      // === 8. ONDAS DE CHOQUE (SHOCKWAVES NARANJA NEÓN) ===
       for (let i = tState.shockwaves.length - 1; i >= 0; i--) {
         const sw = tState.shockwaves[i];
         sw.radius += 28;
@@ -1613,7 +1222,7 @@ export default function App() {
         }
       }
 
-      // === 10. VIÑETA SUTIL DE BORDE ===
+      // === 9. VIÑETA SUTIL DE BORDE ===
       const vigGrad = ctx.createRadialGradient(
         W * 0.5,
         H * 0.5,
@@ -1632,15 +1241,7 @@ export default function App() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [
-    isReady,
-    startPhotoCountdown,
-    triggerEnergyShockwave,
-    triggerParticleExplosion,
-    cycleAccessoryMode,
-  ]);
-
-  const currentAccessoryObj = ACCESSORY_MODES[accessoryModeIdx] || ACCESSORY_MODES[0];
+  }, [isReady, triggerEnergyShockwave, triggerParticleExplosion, cycleAccessoryMode]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0A0A0A] select-none">
@@ -1659,10 +1260,6 @@ export default function App() {
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block z-0" />
 
       <div className="pointer-events-none fixed inset-0 z-10 border-2 border-[#FF6B00]/55" />
-
-      {flashActive && (
-        <div className="fixed inset-0 z-40 bg-white/90 pointer-events-none transition-opacity duration-200" />
-      )}
 
       {/* Barra Superior Institucional UNIFRANZ • Ingeniería de Sistemas */}
       <header className="fixed top-0 inset-x-0 z-20 p-3 md:px-6 md:py-4 flex items-center justify-between gap-3 pointer-events-none">
@@ -1699,15 +1296,6 @@ export default function App() {
           >
             <Gamepad2 className="w-4 h-4" />
             <span>🎮 TEST AR: ¿IA O CIBERSEGURIDAD?</span>
-          </button>
-
-          <button
-            onClick={spinRoleRoulette}
-            className="glass-panel hover:bg-[#FF6B00] hover:text-black text-white px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 transition"
-            title="Girar Ruleta de Rol Profesional de Ingeniería de Sistemas"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Nuevo Rol</span>
           </button>
 
           <button
@@ -1781,23 +1369,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* Overlay de Cuenta Regresiva */}
-      {countdown !== null && (
-        <div className="fixed inset-0 z-30 flex flex-col items-center justify-center pointer-events-none bg-black/40">
-          <div className="relative flex items-center justify-center w-44 h-44 md:w-56 md:h-56 rounded-full glass-panel-bright border-4 border-[#FF6B00]">
-            <span className="font-display font-black text-7xl md:text-8xl text-white">
-              {countdown}
-            </span>
-          </div>
-          <p className="mt-5 font-display font-bold text-sm md:text-base tracking-[0.22em] uppercase text-[#FF6B00] bg-black/85 px-5 py-2 rounded-full border border-[#FF6B00]/60">
-            ¡POSA CON TU VISOR OCULUS & PODERES DE SISTEMAS!
-          </p>
-        </div>
-      )}
-
-      {/* Panel Inferior: Selector de Accesorios (Gesto Paz ✌️) | Superpoderes Interactivos | Captura */}
+      {/* Panel Inferior: Selector de Accesorios (Gesto Paz ✌️) | Superpoderes Interactivos */}
       <footer className="fixed bottom-0 inset-x-0 z-20 p-3 md:p-4 flex flex-col items-center pointer-events-none">
-        <div className="pointer-events-auto max-w-7xl w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
+        <div className="pointer-events-auto max-w-6xl w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
           {/* Selector de Modo de Accesorios (También cambiable haciendo el gesto ✌️ Paz) */}
           <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/45 p-1.5 rounded-2xl border border-white/10">
             <span className="hidden 2xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-[#FF6B00] px-2">
@@ -1876,25 +1450,14 @@ export default function App() {
                   ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
                   : 'bg-white/5 border-white/10 text-white/65 hover:text-white'
               }`}
-              title="Activar/Desactivar Íconos Orbitales de Sistemas y Tarjeta HUD"
+              title="Activar/Desactivar Íconos Orbitales de Sistemas"
             >
               <Sparkles className="w-4 h-4" />
-              <span>HUD</span>
+              <span>Efectos Orbitales</span>
             </button>
           </div>
-
-          <button
-            onClick={() => startPhotoCountdown('📸 CAPTURANDO MOMENTO #NuevaMallaSistemas...')}
-            disabled={countdown !== null}
-            className="w-full xl:w-auto px-6 py-3 rounded-2xl bg-gradient-to-r from-[#FF6B00] to-[#FF5500] hover:from-[#FF7A1A] hover:to-[#FF6B00] text-black font-display font-black text-xs md:text-sm tracking-wider uppercase flex items-center justify-center gap-2.5 animate-cta-pulse transition-transform active:scale-95 disabled:opacity-50"
-          >
-            <Camera className="w-5 h-5 stroke-[2.5]" />
-            <span>Capturar Foto</span>
-          </button>
         </div>
       </footer>
-
-      <PhotoModal photoData={capturedPhoto} onClose={() => setCapturedPhoto(null)} />
     </div>
   );
 }
