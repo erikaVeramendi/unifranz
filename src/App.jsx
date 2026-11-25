@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   FilesetResolver,
-  PoseLandmarker,
   FaceLandmarker,
   HandLandmarker,
   ImageSegmenter,
@@ -9,33 +8,33 @@ import {
 import {
   AR_CONFIG,
   ACCESSORY_MODES,
-  SISTEMAS_CAREER,
+  TECH_STACK_ITEMS,
+  OFFICIAL_CAREER_NAME,
+  OFFICIAL_MENTIONS,
   SIS_QUIZ_QUESTIONS,
 } from './config';
 import {
-  lerp,
   clamp,
-  drawPixelDino,
+  prewarmTechBadgeSprites,
+  getTechBadgeSprite,
+  drawTechStackOrbit,
   drawProceduralWhiteOculusQuest,
-  drawUnifranzHolographicCrown,
-  drawHackerHudVisor,
+  drawCyberEngineerFacialHUD,
   drawProceduralDualSenseController,
-  drawHolographicKeyboard,
-  drawSistemasOrbitalIcons,
+  drawHolographicKeyboardAndTerminal,
   drawNeuralBinarySphere,
   drawCybersecurityHandShield,
   drawDigitalFusionCore,
   drawHeadTiltQuizHUD,
   drawQuizResultEffects,
-  drawMetaverseTronGrid,
+  drawCyberBlackBackground,
   drawSynergyConnectionBeam,
 } from './utils/arHelpers';
 import {
-  extractValidPoses,
   extractValidFaces,
-  pairFacesToBodies,
-  updateTrackedPersons,
+  updateTrackedPersonsFromFaces,
   updateTrackedHands,
+  evaluateFoolproofTwoOpenHands,
   stepTrackedHandsFade,
 } from './utils/personTracker';
 import LoadingScreen from './components/LoadingScreen';
@@ -45,28 +44,40 @@ import {
   Glasses,
   Sparkles,
   Users,
-  Layers,
-  Crown,
   Terminal,
   Gamepad2,
-  Keyboard,
   Zap,
+  Cpu,
+  Square,
+  Keyboard,
 } from 'lucide-react';
 
-export default function App() {
-  // === 100% Ingeniería de Sistemas e Innovación Digital (Sin tarjeta cuadrada ni captura de fotos) ===
-  // Índice de Modo de Accesorio: 0 = Visor Oculus Blanco, 1 = Corona UNIFRANZ, 2 = Ambos, 3 = Modo Hacker HUD
-  const [accessoryModeIdx, setAccessoryModeIdx] = useState(0);
-  const [hudEnabled, setHudEnabled] = useState(true);
-  const [manualKeyboard, setManualKeyboard] = useState(false);
-  const [fondoMetaverso, setFondoMetaverso] = useState(false);
-  const [simTwoPersons, setSimTwoPersons] = useState(false);
-  const [simHandMode, setSimHandMode] = useState('POWERS'); // 'POWERS' | 'GAMING' | 'KEYBOARD' | 'FUSION'
+/**
+ * Función smoothstep matemática exacta entre edge0 (0.45) y edge1 (0.75)
+ * Elimina por completo las manchas pixeladas del techo/pared manteniendo a la persona 100% nítida.
+ */
+function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
 
-  // === Minijuego Interactivo: "¿Qué Mención de Sistemas eres?" (IA vs. Ciberseguridad) ===
+export default function App() {
+  // === 1. Estado del Espejo Interactivo 100% en Vivo ===
+  const [accessoryModeIdx, setAccessoryModeIdx] = useState(0);
+  const [orbitEnabled, setOrbitEnabled] = useState(true);
+  const [activeMention, setActiveMention] = useState(null); // null | 'IA' | 'CIBER'
+  // Regla estricta: el Fondo Negro SOLO cambia manualmente con este botón
+  const [blackBgEnabled, setBlackBgEnabled] = useState(false);
+  // Botón manual para fijar/probar el Teclado Holográfico con un clic
+  const [manualKeyboardEnabled, setManualKeyboardEnabled] = useState(false);
+
+  const [simTwoPersons, setSimTwoPersons] = useState(false);
+  const [simHandMode, setSimHandMode] = useState('POWERS'); // 'POWERS' | 'KEYBOARD' | 'GAMING' | 'ROCK'
+
+  // === Minijuego Interactivo: "¿Qué Mención de Sistemas eres?" ===
   const [quizUiState, setQuizUiState] = useState({
     active: false,
-    winner: null, // null | 'IA' | 'CIBERSEGURIDAD'
+    winner: null, // null | 'IA' | 'CIBER'
   });
 
   // Estados de carga
@@ -88,19 +99,22 @@ export default function App() {
   const fpsSpanRef = useRef(null);
   const peopleSpanRef = useRef(null);
 
-  // Canvases offscreen reutilizables (detección <= 640x480 y segmentación suavizada)
-  const detectCanvasRef = useRef(null);
-  const fgCanvasRef = useRef(null);
-  const maskCanvasRef = useRef(null);
-  const smoothMaskCanvasRef = useRef(null);
+  // Canvases auxiliares para la Composición en 3 Capas Exactas del Modo Fondo Negro:
+  // 1) rawMaskCanvasRef: 256x144 donde se vuelca el smoothstep(0.45, 0.75) de la máscara de persona
+  // 2) blurredMaskCanvasRef: 256x144 donde se aplica blur(4px) para bordes de cabello/hombros suaves
+  // 3) personLayerCanvasRef: resolución completa del video original recortada con destination-in
+  const rawMaskCanvasRef = useRef(null);
+  const blurredMaskCanvasRef = useRef(null);
+  const personLayerCanvasRef = useRef(null);
   const hasSegCacheRef = useRef(false);
 
-  // Espejo del estado en Ref para lectura instantánea dentro de requestAnimationFrame
+  // Espejo del estado en Ref para lectura instantánea dentro de requestAnimationFrame (60 FPS)
   const stateRef = useRef({
     accessoryModeIdx: 0,
-    hudEnabled: true,
-    manualKeyboard: false,
-    fondoMetaverso: false,
+    orbitEnabled: true,
+    activeMention: null,
+    blackBgEnabled: false,
+    manualKeyboardEnabled: false,
     isSimulationMode: false,
     simTwoPersons: false,
     simHandMode: 'POWERS',
@@ -108,74 +122,61 @@ export default function App() {
 
   useEffect(() => {
     stateRef.current.accessoryModeIdx = accessoryModeIdx;
-    stateRef.current.hudEnabled = hudEnabled;
-    stateRef.current.manualKeyboard = manualKeyboard;
-    stateRef.current.fondoMetaverso = fondoMetaverso;
+    stateRef.current.orbitEnabled = orbitEnabled;
+    stateRef.current.activeMention = activeMention;
+    stateRef.current.blackBgEnabled = blackBgEnabled;
+    stateRef.current.manualKeyboardEnabled = manualKeyboardEnabled;
     stateRef.current.isSimulationMode = isSimulationMode;
     stateRef.current.simTwoPersons = simTwoPersons;
     stateRef.current.simHandMode = simHandMode;
+    if (!blackBgEnabled) {
+      hasSegCacheRef.current = false;
+    }
   }, [
     accessoryModeIdx,
-    hudEnabled,
-    manualKeyboard,
-    fondoMetaverso,
+    orbitEnabled,
+    activeMention,
+    blackBgEnabled,
+    manualKeyboardEnabled,
     isSimulationMode,
     simTwoPersons,
     simHandMode,
   ]);
 
-  // Estado del Minijuego en Ref para actualización a 60 FPS
+  // Estado del Minijuego en Ref
   const quizRef = useRef({
     active: false,
     questionIdx: 0,
-    tiltSide: null, // 'LEFT' | 'RIGHT' | null
+    tiltSide: null,
     holdMs: 0,
     lastFrameTs: 0,
     aiVotes: 0,
     cyberVotes: 0,
-    winner: null, // null | 'IA' | 'CIBERSEGURIDAD'
+    winner: null, // null | 'IA' | 'CIBER'
     simTiltOverride: 0,
   });
 
-  // Modelos MediaPipe
+  // Modelos MediaPipe Tasks Vision (selfie_segmenter.tflite específico para personas frente a cámara)
   const landmarkersRef = useRef({
-    pose: null,
     face: null,
     hand: null,
     segmenter: null,
   });
 
-  // Estado de seguimiento multi-persona, manos, partículas y temporizador Tron de 4s
+  // Estado de seguimiento a 60 FPS en Ref
   const trackingRef = useRef({
     trackedPersons: [],
     trackedHands: [],
-    proximity: 0.25,
-    tronFusionUntilTs: 0,
-    lastFusionTriggerTs: 0,
-    lastAccessorySwitchTs: 0,
-    peaceHoldFrames: 0,
+    keyboardAlpha: 0,
+    lastValidTypingTs: 0,
+    terminalCharsTyped: 8,
+    techParticles: [],
     shockwaves: [],
-    particles: [],
-    burstParticles: [],
   });
 
-  // Inicializar partículas ambientales de Sistemas
+  // Pre-renderizar los 14 logos con sus colores oficiales en OffscreenCanvas al iniciar
   useEffect(() => {
-    const pts = [];
-    const tokens = ['0', '1', 'AI', '{ }', '</>', 'DINO'];
-    for (let i = 0; i < 26; i++) {
-      pts.push({
-        x: Math.random(),
-        y: Math.random(),
-        vx: (Math.random() - 0.5) * 0.001,
-        vy: -0.001 - Math.random() * 0.0018,
-        size: 10 + Math.random() * 8,
-        type: tokens[i % tokens.length],
-        alpha: 0.25 + Math.random() * 0.55,
-        color: Math.random() > 0.35 ? '#FF6B00' : '#FFFFFF',
-      });
-    }
-    trackingRef.current.particles = pts;
+    prewarmTechBadgeSprites();
   }, []);
 
   // Soporte de flechas Izquierda/Derecha para responder el test en Modo Simulación
@@ -183,7 +184,7 @@ export default function App() {
     const onKeyDown = (e) => {
       if (!quizRef.current.active) return;
       if (e.key === 'ArrowLeft') quizRef.current.simTiltOverride = -0.28;
-      if (e.key === 'ArrowRight') quizRef.current.simTiltOverride = 0.28;
+      if (e.key === 'ArrowRight') quizRef.current.simTiltOverride = -0.28;
     };
     const onKeyUp = (e) => {
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -198,23 +199,24 @@ export default function App() {
     };
   }, []);
 
-  // Inicializar cámara y modelos MediaPipe GPU
+  // Inicializar cámara 854x480 @ 60fps y modelos MediaPipe (FaceLandmarker, HandLandmarker & selfie_segmenter.tflite)
   const initExperience = useCallback(async (useSimulation = false) => {
     setCameraError(null);
     setLoadingProgress(20);
-    setLoadingStatus('Inicializando motores vectoriales Oculus Quest, DualSense & IA...');
+    setLoadingStatus('Pre-renderizando logos oficiales en OffscreenCanvas...');
+    prewarmTechBadgeSprites();
 
     setLoadingProgress(40);
-    setLoadingStatus('Solicitando acceso a cámara...');
+    setLoadingStatus('Iniciando cámara 854x480 @ 60 FPS de ultra-baja latencia...');
 
     if (!useSimulation) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: AR_CONFIG.CAMERA_IDEAL_WIDTH },
+            height: { ideal: AR_CONFIG.CAMERA_IDEAL_HEIGHT },
+            frameRate: { ideal: AR_CONFIG.CAMERA_IDEAL_FPS },
             facingMode: 'user',
-            frameRate: { ideal: 30 },
           },
           audio: false,
         });
@@ -233,7 +235,7 @@ export default function App() {
     }
 
     setLoadingProgress(65);
-    setLoadingStatus('Cargando MediaPipe Pose, Face, Hand & ImageSegmenter (GPU)...');
+    setLoadingStatus('Cargando FaceLandmarker, HandLandmarker & SelfieSegmenter (GPU)...');
 
     try {
       const vision = await FilesetResolver.forVisionTasks(
@@ -241,19 +243,7 @@ export default function App() {
       );
 
       setLoadingProgress(80);
-      const [poseLandmarker, faceLandmarker, handLandmarker] = await Promise.all([
-        PoseLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath:
-              'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-            delegate: 'GPU',
-          },
-          runningMode: 'VIDEO',
-          numPoses: AR_CONFIG.MAX_PERSONS,
-          minPoseDetectionConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
-          minPosePresenceConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
-          minTrackingConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
-        }),
+      const [faceLandmarker, handLandmarker] = await Promise.all([
         FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath:
@@ -291,11 +281,23 @@ export default function App() {
           outputConfidenceMasks: true,
         });
       } catch (segErr) {
-        console.warn('ImageSegmenter opcional no disponible:', segErr);
+        console.warn('SelfieSegmenter GPU fallback a CPU:', segErr);
+        try {
+          imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath:
+                'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+            },
+            runningMode: 'VIDEO',
+            outputCategoryMask: false,
+            outputConfidenceMasks: true,
+          });
+        } catch (e2) {
+          console.warn('SelfieSegmenter no disponible:', e2);
+        }
       }
 
       landmarkersRef.current = {
-        pose: poseLandmarker,
         face: faceLandmarker,
         hand: handLandmarker,
         segmenter: imageSegmenter,
@@ -305,8 +307,8 @@ export default function App() {
     }
 
     setLoadingProgress(100);
-    setLoadingStatus('¡Espejo AR Ingeniería de Sistemas • Nueva Malla 2026 Listo!');
-    setTimeout(() => setIsReady(true), 250);
+    setLoadingStatus(`¡${OFFICIAL_CAREER_NAME} • 60 FPS Listo!`);
+    setTimeout(() => setIsReady(true), 180);
   }, []);
 
   useEffect(() => {
@@ -339,45 +341,34 @@ export default function App() {
     [showBanner]
   );
 
-  // Explosión de partículas naranjas y blancas al revelar la mención ganadora o fusionar manos
-  const triggerParticleExplosion = useCallback((centerX, centerY, tokensList) => {
-    const tokens = tokensList || ['AI', '0', '1', '{ }', 'CLOUD', 'REACT', '★'];
-    for (let i = 0; i < 42; i++) {
-      const angle = (i / 42) * Math.PI * 2 + Math.random() * 0.2;
-      const speed = 4 + Math.random() * 10;
-      trackingRef.current.burstParticles.push({
-        x: centerX,
-        y: centerY,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        text: tokens[i % tokens.length],
-        size: 13 + Math.random() * 11,
-        alpha: 1,
-        color: i % 2 === 0 ? '#FF6B00' : '#FFFFFF',
-      });
-    }
-  }, []);
+  // Disparar lluvia / explosión de Logos Tech con sus colores reales
+  const spawnTechStackParticles = useCallback(
+    (originX, originY, count = 8, isRadialExplosion = false) => {
+      const list = trackingRef.current.techParticles;
+      if (list.length > 48) return;
 
-  // Alternar entre [ Visor Oculus Blanco ] -> [ Corona UNIFRANZ ] -> [ Ambos ] -> [ Modo Hacker HUD ]
-  const cycleAccessoryMode = useCallback(
-    (originNorm = { x: 0.5, y: 0.35 }, fromPeaceGesture = false) => {
-      setAccessoryModeIdx((prev) => {
-        const nextIdx = (prev + 1) % ACCESSORY_MODES.length;
-        const nextMode = ACCESSORY_MODES[nextIdx];
-        triggerEnergyShockwave(
-          originNorm.x,
-          originNorm.y,
-          fromPeaceGesture
-            ? `✌️ GESTO PAZ DETECTADO: ${nextMode.label.toUpperCase()}`
-            : `MODO ACCESORIO: ${nextMode.label.toUpperCase()}`
-        );
-        return nextIdx;
-      });
+      for (let i = 0; i < count; i++) {
+        const item = TECH_STACK_ITEMS[Math.floor(Math.random() * TECH_STACK_ITEMS.length)];
+        const angle = isRadialExplosion
+          ? (i / count) * Math.PI * 2 + Math.random() * 0.3
+          : -Math.PI / 2 + (Math.random() - 0.5) * 1.45;
+        const speed = isRadialExplosion ? 4.5 + Math.random() * 8 : 3.2 + Math.random() * 5.5;
+
+        list.push({
+          item,
+          x: originX + (Math.random() - 0.5) * 20,
+          y: originY + (Math.random() - 0.5) * 20,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          size: 46 + Math.random() * 20,
+          alpha: 1,
+        });
+      }
     },
-    [triggerEnergyShockwave]
+    []
   );
 
-  // Iniciar el Minijuego Interactivo "¿Qué Mención de Sistemas eres?" (IA vs. Ciberseguridad)
+  // Iniciar el Minijuego Interactivo "¿Qué Mención de Sistemas eres?"
   const startSistemasQuiz = useCallback(() => {
     quizRef.current = {
       active: true,
@@ -394,18 +385,19 @@ export default function App() {
     triggerEnergyShockwave(
       0.5,
       0.32,
-      '🎮 TEST AR INICIADO: INCLINA TU CABEZA A IZQUIERDA (IA) O DERECHA (CIBERSEGURIDAD)'
+      '🎮 TEST AR: INCLINA TU CABEZA A IZQUIERDA O DERECHA'
     );
   }, [triggerEnergyShockwave]);
 
-  // Bucle único de renderizado y visión artificial (60 FPS en Canvas 2D)
+  // ============================================================================
+  // BUCLE DE RESPUESTA INSTANTÁNEA (ZERO-LAG) + COMPOSICIÓN EN 3 CAPAS DEL FONDO NEGRO
+  // ============================================================================
   useEffect(() => {
     if (!isReady) return;
 
     let lastFpsUpdate = performance.now();
     let frameCounter = 0;
     let lastVideoTime = -1;
-    let detectTick = 0;
     let lastDetectTs = 0;
 
     const renderLoop = (now) => {
@@ -440,25 +432,25 @@ export default function App() {
       const tState = trackingRef.current;
       const {
         accessoryModeIdx: accIdx,
-        hudEnabled: showHud,
-        manualKeyboard: forceKeyboard,
-        fondoMetaverso: manualTronBg,
+        orbitEnabled: showOrbit,
+        activeMention: currentMention,
+        blackBgEnabled: manualBlackBg,
+        manualKeyboardEnabled: forceKeyboard,
         isSimulationMode: sim,
         simTwoPersons: sim2P,
         simHandMode: sHandMode,
       } = stateRef.current;
 
       const currentAccessory = ACCESSORY_MODES[accIdx] || ACCESSORY_MODES[0];
-      const isTronMatrixActive = manualTronBg || now < tState.tronFusionUntilTs;
 
       let drawX = 0;
       let drawY = 0;
       let drawW = W;
       let drawH = H;
+      const vW = video?.videoWidth || 854;
+      const vH = video?.videoHeight || 480;
 
       if (!sim && video && video.readyState >= 2) {
-        const vW = video.videoWidth || 1280;
-        const vH = video.videoHeight || 720;
         const vRatio = vW / vH;
         const cRatio = W / H;
 
@@ -476,70 +468,27 @@ export default function App() {
       const toScreenX = (normX) => drawX + (1 - normX) * drawW;
       const toScreenY = (normY) => drawY + normY * drawH;
 
-      // === 1. DETECCIÓN A BAJA RESOLUCIÓN (<= 640x480) EN CUADROS ALTERNOS ===
+      // === 1. DETECCIÓN DIRECTA Y SEGMENTACIÓN LIMPIA DE PERSONA (SELFIE_SEGMENTER) ===
       if (!sim && video && video.readyState >= 2) {
-        const isNewVideoFrame = video.currentTime !== lastVideoTime;
-
-        if (isNewVideoFrame) {
+        if (video.currentTime !== lastVideoTime) {
           lastVideoTime = video.currentTime;
-          detectTick++;
 
-          if (!detectCanvasRef.current) {
-            detectCanvasRef.current = document.createElement('canvas');
-          }
-          const dCanvas = detectCanvasRef.current;
-          const vW = video.videoWidth || 640;
-          const vH = video.videoHeight || 480;
-          const scale = Math.min(
-            AR_CONFIG.DETECTION_MAX_WIDTH / vW,
-            AR_CONFIG.DETECTION_MAX_HEIGHT / vH,
-            1
-          );
-          const detW = Math.max(160, Math.round(vW * scale));
-          const detH = Math.max(120, Math.round(vH * scale));
-          if (dCanvas.width !== detW || dCanvas.height !== detH) {
-            dCanvas.width = detW;
-            dCanvas.height = detH;
-          }
-          const dCtx = dCanvas.getContext('2d', { willReadFrequently: false });
-          dCtx.drawImage(video, 0, 0, detW, detH);
-
-          const ts = Math.max(lastDetectTs + 1, Math.round(now));
+          let ts = Math.max(lastDetectTs + 1, Math.round(now));
           lastDetectTs = ts;
 
-          const runPoseFace = detectTick % AR_CONFIG.DETECTION_STRIDE_FRAMES === 0;
-          const runHands = !runPoseFace;
-
-          if (runPoseFace) {
-            let rawPoses = [];
+          try {
             let rawFaces = [];
-            let faceBlendshapes = [];
-
-            try {
-              if (landmarkersRef.current.pose) {
-                const pRes = landmarkersRef.current.pose.detectForVideo(dCanvas, ts);
-                if (pRes?.landmarks) rawPoses = pRes.landmarks;
-              }
-              if (landmarkersRef.current.face) {
-                const fRes = landmarkersRef.current.face.detectForVideo(dCanvas, ts);
-                if (fRes?.faceLandmarks) {
-                  rawFaces = fRes.faceLandmarks;
-                  faceBlendshapes = fRes.faceBlendshapes || [];
-                }
-              }
-            } catch (e) {
-              // Continuar con el último estado suavizado
+            if (landmarkersRef.current.face) {
+              const fRes = landmarkersRef.current.face.detectForVideo(video, ts);
+              if (fRes?.faceLandmarks) rawFaces = fRes.faceLandmarks;
             }
+            const validFaces = extractValidFaces(rawFaces, toScreenX, toScreenY);
+            updateTrackedPersonsFromFaces(tState.trackedPersons, validFaces, W, now);
 
-            const validPoses = extractValidPoses(rawPoses, toScreenX, toScreenY);
-            const validFaces = extractValidFaces(rawFaces, faceBlendshapes, toScreenX, toScreenY);
-            const detections = pairFacesToBodies(validPoses, validFaces, W);
-            updateTrackedPersons(tState.trackedPersons, detections, W, now);
-          }
-
-          if (runHands && landmarkersRef.current.hand) {
-            try {
-              const handRes = landmarkersRef.current.hand.detectForVideo(dCanvas, ts);
+            if (landmarkersRef.current.hand) {
+              ts += 1;
+              lastDetectTs = ts;
+              const handRes = landmarkersRef.current.hand.detectForVideo(video, ts);
               updateTrackedHands(
                 tState.trackedHands,
                 handRes?.landmarks || [],
@@ -549,115 +498,119 @@ export default function App() {
                 W,
                 now
               );
-            } catch (e) {
-              // Continuar con el último estado suavizado
             }
+          } catch (e) {
+            // Continuar en el siguiente frame
           }
 
-          if (runHands && isTronMatrixActive && landmarkersRef.current.segmenter) {
+          // REGLA ESTRICTA: selfie_segmenter.tflite SOLO corre cuando el botón [ ⬛ Fondo Negro / Modo Real ] está activo
+          if (manualBlackBg && landmarkersRef.current.segmenter) {
             try {
-              const segResult = landmarkersRef.current.segmenter.segmentForVideo(dCanvas, ts);
+              ts += 1;
+              lastDetectTs = ts;
+              const segResult = landmarkersRef.current.segmenter.segmentForVideo(video, ts);
               if (segResult?.confidenceMasks?.length > 0) {
-                const mask = segResult.confidenceMasks[0];
-                const mW = mask.width;
-                const mH = mask.height;
-                const maskFloat = mask.getAsFloat32Array();
+                // En selfie_segmenter, si hay más de una máscara, el índice final corresponde a la persona en primer plano;
+                // si solo hay 1 máscara (256x144), confidenceMasks[0] tiene la confianza [0.0..1.0] de la persona.
+                const masks = segResult.confidenceMasks;
+                const personMask = masks[masks.length - 1];
+                const mW = personMask.width;
+                const mH = personMask.height;
+                const maskFloat = personMask.getAsFloat32Array();
 
-                if (!maskCanvasRef.current) {
-                  maskCanvasRef.current = document.createElement('canvas');
-                  smoothMaskCanvasRef.current = document.createElement('canvas');
-                  fgCanvasRef.current = document.createElement('canvas');
+                if (!rawMaskCanvasRef.current) {
+                  rawMaskCanvasRef.current = document.createElement('canvas');
+                  blurredMaskCanvasRef.current = document.createElement('canvas');
+                  personLayerCanvasRef.current = document.createElement('canvas');
                 }
-                const mCanvas = maskCanvasRef.current;
-                const smCanvas = smoothMaskCanvasRef.current;
-                const fCanvas = fgCanvasRef.current;
+                const rawMaskCanvas = rawMaskCanvasRef.current;
+                const blurredMaskCanvas = blurredMaskCanvasRef.current;
+                const personLayerCanvas = personLayerCanvasRef.current;
 
-                if (mCanvas.width !== mW || mCanvas.height !== mH) {
-                  mCanvas.width = mW;
-                  mCanvas.height = mH;
-                  smCanvas.width = mW;
-                  smCanvas.height = mH;
-                  fCanvas.width = detW;
-                  fCanvas.height = detH;
+                if (rawMaskCanvas.width !== mW || rawMaskCanvas.height !== mH) {
+                  rawMaskCanvas.width = mW;
+                  rawMaskCanvas.height = mH;
+                  blurredMaskCanvas.width = mW;
+                  blurredMaskCanvas.height = mH;
+                }
+                if (personLayerCanvas.width !== vW || personLayerCanvas.height !== vH) {
+                  personLayerCanvas.width = vW;
+                  personLayerCanvas.height = vH;
                 }
 
-                const mCtx = mCanvas.getContext('2d');
-                const imgData = mCtx.createImageData(mW, mH);
+                // Paso 1: Umbral suave (smoothstep entre 0.45 y 0.75) para eliminar manchas y fantasmas del techo/pared
+                const rCtx = rawMaskCanvas.getContext('2d');
+                const imgData = rCtx.createImageData(mW, mH);
                 const d = imgData.data;
+
                 for (let i = 0; i < maskFloat.length; i++) {
-                  const conf = maskFloat[i];
+                  const alphaVal = smoothstep(0.45, 0.75, maskFloat[i]);
                   const idx = i * 4;
                   d[idx] = 255;
                   d[idx + 1] = 255;
                   d[idx + 2] = 255;
-                  d[idx + 3] =
-                    conf > 0.3 ? Math.min(255, Math.floor(((conf - 0.25) / 0.5) * 255)) : 0;
+                  d[idx + 3] = Math.round(alphaVal * 255);
                 }
-                mCtx.putImageData(imgData, 0, 0);
+                rCtx.putImageData(imgData, 0, 0);
 
-                const smCtx = smCanvas.getContext('2d');
-                smCtx.clearRect(0, 0, mW, mH);
-                smCtx.filter = 'blur(2.5px)';
-                smCtx.drawImage(mCanvas, 0, 0, mW, mH);
-                smCtx.filter = 'none';
+                // Paso 2: Suavizado de bordes (Feathering con blur(4px) solo en el canvas pequeño 256x144 de la máscara)
+                const bCtx = blurredMaskCanvas.getContext('2d');
+                bCtx.clearRect(0, 0, mW, mH);
+                bCtx.filter = 'blur(4px)';
+                bCtx.drawImage(rawMaskCanvas, 0, 0, mW, mH);
+                bCtx.filter = 'none';
 
-                const fCtx = fCanvas.getContext('2d');
-                fCtx.clearRect(0, 0, detW, detH);
-                fCtx.drawImage(dCanvas, 0, 0, detW, detH);
-                fCtx.globalCompositeOperation = 'destination-in';
-                fCtx.drawImage(smCanvas, 0, 0, detW, detH);
-                fCtx.globalCompositeOperation = 'source-over';
+                // Paso 3: En el canvas temporal de persona (a resolución completa vW x vH del video),
+                // dibujamos el <video> original a todo color/brillo real y lo recortamos con 'destination-in'
+                const pCtx = personLayerCanvas.getContext('2d');
+                pCtx.globalCompositeOperation = 'source-over';
+                pCtx.clearRect(0, 0, vW, vH);
+                pCtx.drawImage(video, 0, 0, vW, vH);
+                pCtx.globalCompositeOperation = 'destination-in';
+                pCtx.drawImage(blurredMaskCanvas, 0, 0, vW, vH);
+                pCtx.globalCompositeOperation = 'source-over';
 
-                mask.close();
+                masks.forEach((m) => m.close());
                 hasSegCacheRef.current = true;
               }
             } catch (segErr) {
-              // Ignorar error transitorio
+              // Ignorar error transitorio de máscara
             }
           }
         }
 
         stepTrackedHandsFade(tState.trackedHands, now);
 
-        // === 2. DIBUJAR FONDO + VIDEO ESPEJO (CON MATRIZ TRON SI FUSIÓN ACTIVA) ===
-        if (isTronMatrixActive && hasSegCacheRef.current && fgCanvasRef.current) {
-          drawMetaverseTronGrid(ctx, W, H, now);
+        // === 2. COMPOSICIÓN EN 3 CAPAS EXACTAS (CAPA 1: FONDO -> CAPA 2: PERSONA 100% NÍTIDA -> CAPA 3: ELEMENTOS AR) ===
+        if (manualBlackBg) {
+          // CAPA 1 (Fondo): Fondo negro profundo (#050505) + retícula de perspectiva naranja UNIFRANZ (#FF6B00)
+          drawCyberBlackBackground(ctx, W, H, now);
+
+          // CAPA 2 (Persona 100% nítida y brillante): Misma orientación espejo scale(-1, 1) y tamaño que el video
+          const sourceToDraw =
+            hasSegCacheRef.current && personLayerCanvasRef.current
+              ? personLayerCanvasRef.current
+              : video;
+
           ctx.save();
           ctx.translate(W, 0);
           ctx.scale(-1, 1);
-          ctx.drawImage(fgCanvasRef.current, W - drawX - drawW, drawY, drawW, drawH);
+          ctx.drawImage(sourceToDraw, W - drawX - drawW, drawY, drawW, drawH);
           ctx.restore();
         } else {
+          // Modo Real (Cámara directa en espejo con 0% procesamiento de segmentación)
           ctx.save();
           ctx.translate(W, 0);
           ctx.scale(-1, 1);
           ctx.drawImage(video, W - drawX - drawW, drawY, drawW, drawH);
           ctx.restore();
-
-          if (isTronMatrixActive) {
-            ctx.save();
-            ctx.globalAlpha = 0.42;
-            drawMetaverseTronGrid(ctx, W, H, now);
-            ctx.restore();
-          }
         }
       } else if (sim) {
-        // === MODO SIMULACIÓN HOLOGRÁFICA ===
-        if (isTronMatrixActive) {
-          drawMetaverseTronGrid(ctx, W, H, now);
+        // === MODO SIMULACIÓN HOLOGRÁFICA A 60 FPS ===
+        if (manualBlackBg) {
+          drawCyberBlackBackground(ctx, W, H, now);
         } else {
-          const bgGrad = ctx.createRadialGradient(
-            W * 0.5,
-            H * 0.45,
-            50,
-            W * 0.5,
-            H * 0.5,
-            W * 0.8
-          );
-          bgGrad.addColorStop(0, '#1C140D');
-          bgGrad.addColorStop(0.55, '#0E0E0E');
-          bgGrad.addColorStop(1, '#050505');
-          ctx.fillStyle = bgGrad;
+          ctx.fillStyle = '#0E0E0E';
           ctx.fillRect(0, 0, W, H);
         }
 
@@ -670,21 +623,6 @@ export default function App() {
             ? quizRef.current.simTiltOverride
             : Math.sin(now * 0.0018) * 0.25
           : 0;
-
-        const simPoses = centers.map((cx, idx) => {
-          const p = [];
-          const s = sway * (idx === 0 ? 1 : -1);
-          p[0] = { x: cx + s, y: 0.27 + breath, z: 0, visibility: 1 };
-          p[2] = { x: cx + 0.025 + s, y: 0.25 + breath - simQuizTilt * 0.08, z: 0, visibility: 1 };
-          p[5] = { x: cx - 0.025 + s, y: 0.25 + breath + simQuizTilt * 0.08, z: 0, visibility: 1 };
-          p[7] = { x: cx + 0.055 + s, y: 0.25 + breath - simQuizTilt * 0.1, z: 0, visibility: 1 };
-          p[8] = { x: cx - 0.055 + s, y: 0.25 + breath + simQuizTilt * 0.1, z: 0, visibility: 1 };
-          p[11] = { x: cx + 0.11 + s, y: 0.43 + breath, z: 0, visibility: 1 };
-          p[12] = { x: cx - 0.11 + s, y: 0.43 - breath * 0.5, z: 0, visibility: 1 };
-          p[23] = { x: cx + 0.08 + s, y: 0.77 + breath, z: 0, visibility: 1 };
-          p[24] = { x: cx - 0.08 + s, y: 0.77 + breath, z: 0, visibility: 1 };
-          return p;
-        });
 
         const simFaces = centers.map((cx, idx) => {
           const f = [];
@@ -699,55 +637,60 @@ export default function App() {
           return f;
         });
 
-        const validPoses = extractValidPoses(simPoses, toScreenX, toScreenY);
-        const validFaces = extractValidFaces(simFaces, [], toScreenX, toScreenY);
-        const detections = pairFacesToBodies(validPoses, validFaces, W);
-        updateTrackedPersons(tState.trackedPersons, detections, W, now);
+        const validFaces = extractValidFaces(simFaces, toScreenX, toScreenY);
+        updateTrackedPersonsFromFaces(tState.trackedPersons, validFaces, W, now);
 
-        const handOsc = Math.sin(now * 0.002) * 0.035;
+        const handOsc = Math.sin(now * 0.002) * 0.025;
         const c0 = centers[0];
 
         const makeSimHandByMode = (hx, hy, modeType) => {
           const arr = Array.from({ length: 21 }, () => ({ x: hx, y: hy, z: 0 }));
-          arr[0] = { x: hx, y: hy + 0.06, z: 0 };
+          arr[0] = { x: hx, y: hy + 0.05, z: 0 };
           arr[5] = { x: hx - 0.025, y: hy, z: 0 };
-          arr[9] = { x: hx, y: hy - 0.01, z: 0 };
+          arr[9] = { x: hx, y: hy, z: 0 };
           arr[13] = { x: hx + 0.015, y: hy, z: 0 };
-          arr[17] = { x: hx + 0.03, y: hy + 0.005, z: 0 };
+          arr[17] = { x: hx + 0.03, y: hy, z: 0 };
 
           if (modeType === 'GAMING') {
             [8, 6, 12, 10, 16, 14, 20, 18].forEach((k) => {
-              arr[k] = { x: hx, y: hy + 0.02, z: 0 };
+              arr[k] = { x: hx, y: hy + 0.015, z: 0 };
             });
-          } else if (modeType === 'KEYBOARD') {
-            arr[6] = { x: hx - 0.025, y: hy + 0.02, z: 0 };
-            arr[8] = { x: hx - 0.025, y: hy + 0.08, z: 0 };
-            arr[10] = { x: hx, y: hy + 0.02, z: 0 };
-            arr[12] = { x: hx, y: hy + 0.085, z: 0 };
-            arr[14] = { x: hx + 0.015, y: hy + 0.02, z: 0 };
-            arr[16] = { x: hx + 0.015, y: hy + 0.08, z: 0 };
-            arr[18] = { x: hx + 0.03, y: hy + 0.02, z: 0 };
-            arr[20] = { x: hx + 0.03, y: hy + 0.075, z: 0 };
-          } else {
+          } else if (modeType === 'ROCK') {
             arr[6] = { x: hx - 0.025, y: hy - 0.03, z: 0 };
             arr[8] = { x: hx - 0.025, y: hy - 0.08, z: 0 };
-            arr[10] = { x: hx, y: hy - 0.03, z: 0 };
-            arr[12] = { x: hx, y: hy - 0.085, z: 0 };
-            arr[14] = { x: hx + 0.015, y: hy - 0.03, z: 0 };
-            arr[16] = { x: hx + 0.015, y: hy - 0.08, z: 0 };
+            arr[10] = { x: hx, y: hy + 0.01, z: 0 };
+            arr[12] = { x: hx, y: hy + 0.02, z: 0 };
+            arr[14] = { x: hx + 0.015, y: hy + 0.01, z: 0 };
+            arr[16] = { x: hx + 0.015, y: hy + 0.02, z: 0 };
             arr[18] = { x: hx + 0.03, y: hy - 0.03, z: 0 };
             arr[20] = { x: hx + 0.03, y: hy - 0.075, z: 0 };
+          } else {
+            // 4 dedos extendidos hacia arriba (punta 8, 12, 16, 20 por encima de nudillo medio 6, 10, 14, 18)
+            const tap = Math.sin(now * 0.022 + hx * 12) * 0.012;
+            arr[6] = { x: hx - 0.025, y: hy - 0.03, z: 0 };
+            arr[8] = { x: hx - 0.025, y: hy - 0.08 + tap, z: 0 };
+            arr[10] = { x: hx, y: hy - 0.03, z: 0 };
+            arr[12] = { x: hx, y: hy - 0.085 - tap, z: 0 };
+            arr[14] = { x: hx + 0.015, y: hy - 0.03, z: 0 };
+            arr[16] = { x: hx + 0.015, y: hy - 0.08 + tap, z: 0 };
+            arr[18] = { x: hx + 0.03, y: hy - 0.03, z: 0 };
+            arr[20] = { x: hx + 0.03, y: hy - 0.075 - tap, z: 0 };
           }
           return arr;
         };
 
-        const spread = sHandMode === 'FUSION' ? 0.03 : sHandMode === 'KEYBOARD' ? 0.1 : 0.16;
+        // En modo POWERS simulamos 1 sola mano abierta para ver la Esfera IA; en KEYBOARD simulamos las 2 manos abiertas
+        const simHandsList =
+          sHandMode === 'POWERS'
+            ? [makeSimHandByMode(c0 + 0.16 + handOsc, 0.48 + breath, 'POWERS')]
+            : [
+                makeSimHandByMode(c0 - 0.15 + handOsc, 0.52 + breath, sHandMode),
+                makeSimHandByMode(c0 + 0.15 - handOsc, 0.52 - breath, sHandMode),
+              ];
+
         updateTrackedHands(
           tState.trackedHands,
-          [
-            makeSimHandByMode(c0 - spread + handOsc, 0.48 + breath, sHandMode),
-            makeSimHandByMode(c0 + spread - handOsc, 0.48 - breath, sHandMode),
-          ],
+          simHandsList,
           tState.trackedPersons,
           toScreenX,
           toScreenY,
@@ -761,26 +704,17 @@ export default function App() {
       }
 
       const persons = tState.trackedPersons;
+      const effectiveMention = currentMention || quizRef.current.winner;
 
-      if (persons.length > 0) {
-        const maxSW = Math.max(...persons.map((p) => p.shoulderWidth));
-        const rawProx = clamp((maxSW / W - 0.13) / 0.28, 0.15, 1.0);
-        tState.proximity = lerp(tState.proximity, rawProx, 0.1);
-      }
-
-      // === 3. RENDERIZAR VISOR OCULUS QUEST BLANCO, CORONA UNIFRANZ Y ELEMENTOS ORBITALES DE SISTEMAS ===
+      // === CAPA 3 (Elementos AR): ÓRBITA TECH A TODO COLOR, VISOR OCULUS QUEST BLANCO & HUD CIBER-INGENIERO ===
       for (let idx = 0; idx < persons.length; idx++) {
         const person = persons[idx];
 
-        // 3A. Elementos Orbitales de Ingeniería de Sistemas (Cubo 3D, Microchip, DualSense, Red Neuronal, { </> } y Dino Runner)
-        if (showHud) {
-          drawSistemasOrbitalIcons(ctx, person, W, H, now + idx * 600);
+        if (showOrbit) {
+          drawTechStackOrbit(ctx, person, effectiveMention, now + idx * 600);
         }
 
-        // 3B. Visor Oculus Quest Blanco Futurista (100% Procedural en Canvas 2D)
-        const shouldDrawOculus =
-          currentAccessory.oculus || quizRef.current.winner !== null;
-        if (shouldDrawOculus && person.hasVr) {
+        if (currentAccessory.oculus && person.hasVr) {
           drawProceduralWhiteOculusQuest(
             ctx,
             person.vrCenterX,
@@ -792,33 +726,16 @@ export default function App() {
           );
         }
 
-        // 3C. Modo Hacker HUD (Visor Ciber-Analítico)
-        if (currentAccessory.hackerHud && person.hasVr) {
-          drawHackerHudVisor(ctx, person, now);
+        if (currentAccessory.cyberHud && person.hasVr) {
+          drawCyberEngineerFacialHUD(ctx, person, now);
         }
 
-        // 3D. Corona Holográfica UNIFRANZ ("LÍDER DEL FUTURO")
-        const shouldDrawCrown =
-          currentAccessory.crown || quizRef.current.winner !== null;
-        if (shouldDrawCrown && person.hasVr) {
-          drawUnifranzHolographicCrown(
-            ctx,
-            person.foreheadX ?? person.vrCenterX,
-            person.foreheadY ?? person.vrCenterY - person.vrWidth * 0.3,
-            person.faceHeight || person.vrWidth * 0.9,
-            person.templeWidth || person.vrWidth * 0.78,
-            person.vrAngle,
-            now
-          );
-        }
-
-        // 3E. Efectos Holográficos del Minijuego (IA vs Ciberseguridad)
-        if (idx === 0 && quizRef.current.winner) {
-          drawQuizResultEffects(ctx, person, quizRef.current.winner, W, H, now);
+        if (idx === 0 && effectiveMention) {
+          drawQuizResultEffects(ctx, person, effectiveMention, W, H);
         }
       }
 
-      // === 3F. LÓGICA Y RENDERIZADO DEL MINIJUEGO AR "¿IA O CIBERSEGURIDAD?" (CONTROLADO POR CABEZA) ===
+      // === 3D. MINIJUEGO AR "¿QUÉ MENCIÓN DE SISTEMAS ERES?" ===
       if (quizRef.current.active && persons.length > 0) {
         const player = persons[0];
         const qState = quizRef.current;
@@ -882,27 +799,22 @@ export default function App() {
                 `⚡ RESPUESTA ${qState.questionIdx}/3 REGISTRADA`
               );
             } else {
-              // ¡Revelación Épica del Resultado! Equipa Visor Oculus Blanco + Corona Holográfica UNIFRANZ
-              const winnerKey = qState.aiVotes >= qState.cyberVotes ? 'IA' : 'CIBERSEGURIDAD';
+              const winnerKey = qState.aiVotes >= qState.cyberVotes ? 'IA' : 'CIBER';
+              const officialTitle =
+                winnerKey === 'IA' ? OFFICIAL_MENTIONS.IA : OFFICIAL_MENTIONS.CIBER;
+
               qState.active = false;
               qState.winner = winnerKey;
 
               setAccessoryModeIdx(2);
+              setActiveMention(winnerKey);
               setQuizUiState({ active: false, winner: winnerKey });
 
-              triggerParticleExplosion(
-                player.shoulderCenterX,
-                player.shoulderCenterY,
-                winnerKey === 'IA'
-                  ? ['AI', 'NEURAL', '10', 'GPT', 'ML', '★', '01']
-                  : ['SEC', 'AES-256', '🛡️', 'RSA', '0x7F', 'LOCK', '★']
-              );
+              spawnTechStackParticles(player.shoulderCenterX, player.shoulderCenterY, 16, true);
               triggerEnergyShockwave(
                 player.shoulderCenterX / W,
                 player.shoulderCenterY / H,
-                winnerKey === 'IA'
-                  ? '🏆 MENCIÓN ASIGNADA: INTELIGENCIA ARTIFICIAL + OCULUS & CORONA'
-                  : '🏆 MENCIÓN ASIGNADA: CIBERSEGURIDAD + OCULUS & CORONA'
+                `🏆 ${officialTitle.toUpperCase()}`
               );
             }
           }
@@ -931,7 +843,7 @@ export default function App() {
         }
       }
 
-      // === 5. SUPERPODERES EN LAS MANOS, MANDOS DUALSENSE, TECLADO HOLOGRÁFICO Y GESTO DE PAZ ✌️ ===
+      // === 5. GESTOS INFALIBLES DE MANOS: 🖐️🖐️ 2 MANOS ABIERTAS = TECLADO | ✊✊ 2 PUÑOS = MANDO PS5 | 🖐️ 1 MANO = PODER MENCIÓN ===
       const trackedHands = tState.trackedHands;
       const handsByPersonId = new Map();
 
@@ -944,7 +856,7 @@ export default function App() {
         }
         handsByPersonId.get(hand.ownerPersonId).push(hand);
 
-        if (showHud && !hand.isMissing && hand.rawLandmarks) {
+        if (!hand.isMissing && hand.rawLandmarks) {
           ctx.save();
           ctx.globalAlpha = hand.alpha;
           ctx.fillStyle = '#FF6B00';
@@ -957,136 +869,102 @@ export default function App() {
           }
           ctx.restore();
         }
-
-        // Control de Cambio de Accesorios: Gesto de Paz ✌️ (2 dedos levantados)
-        if (!sim && !hand.isMissing && hand.gesture === 'PEACE') {
-          tState.peaceHoldFrames++;
-          if (
-            tState.peaceHoldFrames >= 7 &&
-            now - tState.lastAccessorySwitchTs > AR_CONFIG.ACCESSORY_SWITCH_COOLDOWN_MS
-          ) {
-            tState.lastAccessorySwitchTs = now;
-            tState.peaceHoldFrames = 0;
-            cycleAccessoryMode({ x: hand.x / W, y: hand.y / H }, true);
-          }
-        }
       }
+
+      let anyKeyboardActive = forceKeyboard;
 
       handsByPersonId.forEach((hands, ownerId) => {
         const person = persons.find((p) => p.id === ownerId) || persons[0];
         if (!person) return;
 
-        // A. Comprobar Fusión "Innovación Digital" (Juntar ambas palmas o puños chocando)
-        let isFused = false;
-        if (hands.length >= 2) {
-          const h1 = hands[0];
-          const h2 = hands[1];
-          const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
-          const fuseThreshold = Math.max(135, person.shoulderWidth * 0.78);
+        // A. GESTO INFALIBLE 1: ✊✊ AMBOS PUÑOS CERRADOS -> MANDO GAMING PLAYSTATION DUALSENSE
+        const bothFistsClosed =
+          hands.length >= 2 && hands.every((h) => h.gesture === 'FIST');
 
-          if (handDist < fuseThreshold) {
-            isFused = true;
-            const coreX = (h1.x + h2.x) / 2;
-            const coreY = (h1.y + h2.y) / 2;
-            const coreAlpha = Math.min(h1.alpha, h2.alpha);
+        if (bothFistsClosed) {
+          const ctrlX = (hands[0].x + hands[1].x) / 2;
+          const ctrlY = (hands[0].y + hands[1].y) / 2;
+          const ctrlTilt =
+            Math.atan2(
+              hands[1].y - hands[0].y,
+              Math.max(20, Math.abs(hands[1].x - hands[0].x))
+            ) * (hands[1].x >= hands[0].x ? 1 : -1);
 
-            drawDigitalFusionCore(
-              ctx,
-              coreX,
-              coreY,
-              Math.max(64, person.shoulderWidth * 0.36),
-              now,
-              coreAlpha
-            );
-
-            tState.tronFusionUntilTs = now + AR_CONFIG.TRON_FUSION_DURATION_MS;
-            if (now - tState.lastFusionTriggerTs > 2200) {
-              tState.lastFusionTriggerTs = now;
-              triggerEnergyShockwave(
-                coreX / W,
-                coreY / H,
-                '⚡ FUSIÓN INNOVACIÓN DIGITAL: MATRIZ TRON ACTIVADA (4s)'
-              );
-              triggerParticleExplosion(coreX, coreY, ['0', '1', 'AI', 'TRON', '{ }', '</>']);
-            }
-          }
+          drawProceduralDualSenseController(
+            ctx,
+            ctrlX,
+            ctrlY,
+            Math.max(120, person.shoulderWidth * 0.65),
+            clamp(ctrlTilt, -0.5, 0.5),
+            now,
+            true,
+            Math.min(hands[0].alpha, hands[1].alpha)
+          );
+          return;
         }
 
-        if (isFused) return;
+        // B. GESTO INFALIBLE 2: 🖐️🖐️ DOS MANOS ABIERTAS AL FRENTE (4 dedos extendidos en cada mano) -> TECLADO HOLOGRÁFICO + TERMINAL
+        const twoOpenEval = evaluateFoolproofTwoOpenHands(hands);
+        if (twoOpenEval.isTwoOpenHands || forceKeyboard) {
+          anyKeyboardActive = true;
+          tState.lastValidTypingTs = now;
+          tState.keyboardAlpha = Math.min(1, tState.keyboardAlpha + 0.25);
 
-        // B. Comprobar Teclado Holográfico Flotante (Modo Hacker / Developer)
-        const bothHandsTyping =
-          hands.length >= 2 &&
-          hands.every(
-            (h) =>
-              h.gesture === 'TYPING' ||
-              (h.y > person.shoulderCenterY + person.torsoHeight * 0.05 &&
-                h.y < person.shoulderCenterY + person.torsoHeight * 0.85 &&
-                h.gesture !== 'FIST' &&
-                h.gesture !== 'OPEN_PALM')
+          // Escribir código en vivo en la mini-terminal conforme mueve los dedos
+          const speedBoost = twoOpenEval.motionSpeed > 1.2 ? 0.55 : 0.18;
+          tState.terminalCharsTyped += speedBoost;
+        }
+
+        if (tState.keyboardAlpha > 0.02) {
+          const kbCenterX =
+            hands[0]?.x && hands[1]?.x
+              ? (hands[0].x + hands[1].x) / 2
+              : person.shoulderCenterX;
+          const kbCenterY =
+            hands[0]?.y && hands[1]?.y
+              ? (hands[0].y + hands[1].y) / 2 + 16
+              : person.shoulderCenterY + person.torsoHeight * 0.36;
+          const kbWidth = Math.max(
+            320,
+            person.shoulderWidth * AR_CONFIG.KEYBOARD_WIDTH_FACTOR
           );
+          const allFingerTips = hands.flatMap((h) => h.fingerTips || []);
 
-        if (bothHandsTyping || forceKeyboard || currentAccessory.hackerHud) {
-          const kbCenterX = person.shoulderCenterX;
-          const kbCenterY = person.shoulderCenterY + person.torsoHeight * 0.42;
-          const kbWidth = person.shoulderWidth * AR_CONFIG.KEYBOARD_WIDTH_FACTOR;
-          const allFingerTips = hands.flatMap((h) => h.fingerTips || [{ x: h.x, y: h.y }]);
-
-          drawHolographicKeyboard(
+          drawHolographicKeyboardAndTerminal(
             ctx,
             kbCenterX,
             kbCenterY,
             kbWidth,
             allFingerTips,
-            now,
-            (hitX, hitY) => {
-              if (tState.burstParticles.length < 85) {
-                const codeWords = ['React', 'AI', 'Cloud', '0101', 'Node', 'Docker', 'PyTorch'];
-                tState.burstParticles.push({
-                  x: hitX,
-                  y: hitY,
-                  vx: (Math.random() - 0.5) * 1.8,
-                  vy: -3.2 - Math.random() * 3.5,
-                  text: codeWords[Math.floor(Math.random() * codeWords.length)],
-                  size: 11 + Math.random() * 6,
-                  alpha: 1,
-                  color: Math.random() > 0.4 ? '#FF6B00' : '#FFFFFF',
-                });
-              }
+            tState.terminalCharsTyped,
+            tState.keyboardAlpha,
+            () => {
+              tState.terminalCharsTyped += 0.35;
             }
           );
         }
 
-        // C. Poderes Individuales en cada Mano
+        if (twoOpenEval.isTwoOpenHands) return;
+
+        // C. GESTO 3: 🖐️ UNA MANO ABIERTA (Izquierda = Inteligencia Artificial y Ciencia de Datos | Derecha = Ciberseguridad y Blockchain)
         hands.forEach((h, hIdx) => {
           if (h.gesture === 'FIST') {
             drawProceduralDualSenseController(
               ctx,
               h.x,
-              h.y - 18,
-              Math.max(82, person.shoulderWidth * AR_CONFIG.DUALSENSE_WIDTH_FACTOR),
+              h.y - 16,
+              Math.max(85, person.shoulderWidth * 0.48),
               h.tiltAngle,
               now,
               true,
               h.alpha
             );
-
-            if (tState.burstParticles.length < 85 && Math.random() < 0.35) {
-              const psSyms = ['△', '○', '✕', '□'];
-              const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
-              const speed = 3 + Math.random() * 5;
-              tState.burstParticles.push({
-                x: h.x,
-                y: h.y - 25,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
-                text: psSyms[Math.floor(Math.random() * psSyms.length)],
-                size: 14 + Math.random() * 8,
-                alpha: 1,
-                color: Math.random() > 0.45 ? '#FF6B00' : '#FFFFFF',
-              });
+          } else if (h.isOpenHand4Fingers || h.gesture === 'ROCK' || h.gesture === 'OPEN_PALM') {
+            const emitProb = h.gesture === 'ROCK' ? 0.45 : 0.24;
+            if (Math.random() < emitProb) {
+              spawnTechStackParticles(h.x, h.y - 24, 1, false);
             }
-          } else if (!bothHandsTyping) {
+
             if (h.anatomicalSide === 'LEFT_HAND') {
               const oculusTarget = person.hasVr
                 ? { x: person.vrCenterX, y: person.vrCenterY }
@@ -1114,95 +992,61 @@ export default function App() {
         });
       });
 
+      // Si el usuario activó el botón manual "⌨️ Teclado Holográfico" incluso sin manos en pantalla, mostrarlo frente a la persona
       if (forceKeyboard && persons.length > 0 && trackedHands.length === 0) {
+        tState.lastValidTypingTs = now;
+        tState.keyboardAlpha = 1;
+        tState.terminalCharsTyped += 0.22;
         const p0 = persons[0];
-        drawHolographicKeyboard(
+        drawHolographicKeyboardAndTerminal(
           ctx,
           p0.shoulderCenterX,
-          p0.shoulderCenterY + p0.torsoHeight * 0.42,
-          p0.shoulderWidth * AR_CONFIG.KEYBOARD_WIDTH_FACTOR,
-          [{ x: p0.shoulderCenterX, y: p0.shoulderCenterY + p0.torsoHeight * 0.42 }],
-          now,
-          (hitX, hitY) => {
-            if (tState.burstParticles.length < 75) {
-              const codeWords = ['React', 'AI', 'Cloud', '0101'];
-              tState.burstParticles.push({
-                x: hitX,
-                y: hitY,
-                vx: (Math.random() - 0.5) * 1.5,
-                vy: -3 - Math.random() * 3,
-                text: codeWords[Math.floor(Math.random() * codeWords.length)],
-                size: 12,
-                alpha: 1,
-                color: Math.random() > 0.4 ? '#FF6B00' : '#FFFFFF',
-              });
-            }
-          }
+          p0.shoulderCenterY + p0.torsoHeight * 0.36,
+          Math.max(320, p0.shoulderWidth * AR_CONFIG.KEYBOARD_WIDTH_FACTOR),
+          [
+            {
+              x: p0.shoulderCenterX + Math.sin(now * 0.008) * 110,
+              y: p0.shoulderCenterY + p0.torsoHeight * 0.36,
+            },
+          ],
+          tState.terminalCharsTyped,
+          1
         );
       }
 
-      // === 6. PARTÍCULAS DE CÓDIGO, SÍMBOLOS PLAYSTATION Y EXPLOSIONES ===
-      if (tState.burstParticles.length > 0) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        for (let i = tState.burstParticles.length - 1; i >= 0; i--) {
-          const bp = tState.burstParticles[i];
-          bp.x += bp.vx;
-          bp.y += bp.vy;
-          bp.alpha -= 0.02;
+      // Desvanecer el teclado suavemente en 0.3s cuando baja las manos y el botón manual no está activo
+      if (!anyKeyboardActive && tState.keyboardAlpha > 0) {
+        const elapsedSinceTyping = now - tState.lastValidTypingTs;
+        tState.keyboardAlpha = clamp(
+          1 - elapsedSinceTyping / AR_CONFIG.KEYBOARD_FADE_DURATION_MS,
+          0,
+          1
+        );
+      }
 
-          if (bp.alpha <= 0.03 || bp.x < -50 || bp.x > W + 50 || bp.y < -50 || bp.y > H + 50) {
-            tState.burstParticles.splice(i, 1);
+      // === 6. RENDERIZAR PARTÍCULAS DE LOGOS DE TECNOLOGÍAS (COLORES OFICIALES PRE-CACHEADOS) ===
+      if (tState.techParticles.length > 0) {
+        for (let i = tState.techParticles.length - 1; i >= 0; i--) {
+          const tp = tState.techParticles[i];
+          tp.x += tp.vx;
+          tp.y += tp.vy;
+          tp.vy -= 0.04;
+          tp.alpha -= 0.016;
+
+          if (tp.alpha <= 0.03 || tp.x < -80 || tp.x > W + 80 || tp.y < -80 || tp.y > H + 80) {
+            tState.techParticles.splice(i, 1);
             continue;
           }
 
-          ctx.font = `900 ${Math.round(bp.size)}px "Orbitron", monospace`;
-          ctx.fillStyle = bp.color;
-          ctx.globalAlpha = bp.alpha;
-          ctx.fillText(bp.text, bp.x, bp.y);
+          const sprite = getTechBadgeSprite(tp.item);
+          ctx.save();
+          ctx.globalAlpha = tp.alpha;
+          ctx.drawImage(sprite, tp.x - tp.size / 2, tp.y - tp.size / 2, tp.size, tp.size);
+          ctx.restore();
         }
-        ctx.restore();
       }
 
-      // === 7. PARTÍCULAS AMBIENTALES DE SISTEMAS ===
-      if (showHud) {
-        const prox = tState.proximity;
-        const speedMultiplier = 0.7 + prox * 1.8;
-        tState.particles.forEach((p) => {
-          p.y += p.vy * speedMultiplier;
-          p.x += p.vx * speedMultiplier;
-          if (p.y < -0.05) {
-            p.y = 1.05;
-            p.x = Math.random();
-          }
-          if (p.x < 0) p.x = 1;
-          if (p.x > 1) p.x = 0;
-
-          const px = p.x * W;
-          const py = p.y * H;
-
-          if (p.type === 'DINO') {
-            drawPixelDino(
-              ctx,
-              px,
-              py,
-              2.2 + prox * 0.9,
-              p.color,
-              clamp(p.alpha * (0.5 + prox * 0.5), 0.2, 0.9),
-              Math.floor(now / 220) % 2
-            );
-          } else {
-            ctx.save();
-            ctx.font = `700 ${Math.round(p.size + prox * 4)}px "Orbitron", monospace`;
-            ctx.fillStyle = p.color;
-            ctx.globalAlpha = clamp(p.alpha * (0.45 + prox * 0.5), 0.15, 0.85);
-            ctx.fillText(p.type, px, py);
-            ctx.restore();
-          }
-        });
-      }
-
-      // === 8. ONDAS DE CHOQUE (SHOCKWAVES NARANJA NEÓN) ===
+      // === 7. ONDAS DE CHOQUE (SHOCKWAVES NARANJA NEÓN) ===
       for (let i = tState.shockwaves.length - 1; i >= 0; i--) {
         const sw = tState.shockwaves[i];
         sw.radius += 28;
@@ -1221,27 +1065,13 @@ export default function App() {
           tState.shockwaves.splice(i, 1);
         }
       }
-
-      // === 9. VIÑETA SUTIL DE BORDE ===
-      const vigGrad = ctx.createRadialGradient(
-        W * 0.5,
-        H * 0.5,
-        Math.min(W, H) * 0.38,
-        W * 0.5,
-        H * 0.5,
-        Math.max(W, H) * 0.78
-      );
-      vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      vigGrad.addColorStop(1, 'rgba(10, 10, 10, 0.58)');
-      ctx.fillStyle = vigGrad;
-      ctx.fillRect(0, 0, W, H);
     };
 
     rafRef.current = requestAnimationFrame(renderLoop);
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isReady, triggerEnergyShockwave, triggerParticleExplosion, cycleAccessoryMode]);
+  }, [isReady, triggerEnergyShockwave, spawnTechStackParticles]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0A0A0A] select-none">
@@ -1261,17 +1091,17 @@ export default function App() {
 
       <div className="pointer-events-none fixed inset-0 z-10 border-2 border-[#FF6B00]/55" />
 
-      {/* Barra Superior Institucional UNIFRANZ • Ingeniería de Sistemas */}
+      {/* Barra Superior Institucional UNIFRANZ • Ingeniería de Sistemas e Innovación Digital */}
       <header className="fixed top-0 inset-x-0 z-20 p-3 md:px-6 md:py-4 flex items-center justify-between gap-3 pointer-events-none">
         <div className="pointer-events-auto glass-panel px-4 py-2 rounded-2xl flex items-center gap-3.5">
           <UnifranzLogo className="h-8 md:h-10" />
           <div className="hidden sm:flex flex-col border-l border-white/15 pl-3.5">
             <span className="font-display font-bold text-[10px] text-[#FF6B00] tracking-widest uppercase">
-              INAUGURACIÓN NUEVA MALLA 2026 • #NuevaMallaSistemas
+              UNIFRANZ AR MIRROR EXPERIENCE
             </span>
-            <span className="font-tech text-xs text-white/95 font-semibold flex items-center gap-1.5">
-              <Code2 className="w-3.5 h-3.5 text-[#FF6B00]" />
-              {SISTEMAS_CAREER.fullName}
+            <span className="font-tech text-xs md:text-sm text-white font-bold flex items-center gap-1.5">
+              <Code2 className="w-4 h-4 text-[#FF6B00]" />
+              {OFFICIAL_CAREER_NAME}
             </span>
           </div>
         </div>
@@ -1284,31 +1114,38 @@ export default function App() {
         )}
 
         <div className="pointer-events-auto flex items-center gap-2">
-          {/* Botón Destacado del Minijuego Interactivo "¿IA o Ciberseguridad?" */}
+          {/* Botón Destacado del Minijuego Interactivo */}
           <button
             onClick={startSistemasQuiz}
-            className={`px-3.5 py-2 rounded-2xl font-display font-extrabold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition shadow-neon-orange ${
+            className={`px-3.5 py-2 rounded-2xl font-display font-extrabold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
               quizUiState.active
                 ? 'bg-white text-black border-[#FF6B00] animate-pulse'
                 : 'bg-gradient-to-r from-[#FF6B00] to-[#FF5500] text-black border-white/30 hover:scale-105'
             }`}
-            title="Iniciar Test AR controlado inclinando la cabeza: ¿IA o Ciberseguridad?"
+            title="Iniciar Test AR controlado inclinando la cabeza"
           >
             <Gamepad2 className="w-4 h-4" />
-            <span>🎮 TEST AR: ¿IA O CIBERSEGURIDAD?</span>
+            <span>🎮 TEST AR DE MENCIÓN</span>
           </button>
 
+          {/* Selector de Mención Oficial en el Encabezado */}
           <button
-            onClick={() => setFondoMetaverso((prev) => !prev)}
-            className={`px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
-              fondoMetaverso
-                ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
-                : 'glass-panel text-white/75 hover:text-white border-white/15'
-            }`}
-            title="Activar/Desactivar Matriz Cibernética Tron"
+            onClick={() =>
+              setActiveMention((prev) =>
+                prev === null ? 'IA' : prev === 'IA' ? 'CIBER' : null
+              )
+            }
+            className="glass-panel hover:border-[#FF6B00] px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 text-white transition"
+            title="Alternar Mención Oficial en Órbita"
           >
-            <Layers className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Matriz Tron</span>
+            <Cpu className="w-3.5 h-3.5 text-[#FF6B00]" />
+            <span className="hidden md:inline">
+              {activeMention === 'IA'
+                ? OFFICIAL_MENTIONS.IA
+                : activeMention === 'CIBER'
+                ? OFFICIAL_MENTIONS.CIBER
+                : 'Ambas Menciones'}
+            </span>
           </button>
 
           {isSimulationMode && (
@@ -1317,16 +1154,16 @@ export default function App() {
                 onClick={() =>
                   setSimHandMode((prev) =>
                     prev === 'POWERS'
-                      ? 'GAMING'
-                      : prev === 'GAMING'
                       ? 'KEYBOARD'
                       : prev === 'KEYBOARD'
-                      ? 'FUSION'
+                      ? 'GAMING'
+                      : prev === 'GAMING'
+                      ? 'ROCK'
                       : 'POWERS'
                   )
                 }
                 className="px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border glass-panel text-[#FF6B00] border-[#FF6B00]/60"
-                title="Alternar gestos de mano en Modo Simulación (Esfera IA/Escudo -> Mandos PS5 -> Teclado -> Fusión Tron)"
+                title="Alternar gestos en Simulación (POWERS 1 Mano -> KEYBOARD 2 Manos Abiertas -> GAMING 2 Puños -> ROCK)"
               >
                 <Zap className="w-3.5 h-3.5" />
                 <span>Sim: {simHandMode}</span>
@@ -1339,7 +1176,6 @@ export default function App() {
                     ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
                     : 'glass-panel text-[#FF6B00] border-[#FF6B00]/60'
                 }`}
-                title="Alternar 1 o 2 personas en simulación"
               >
                 <Users className="w-3.5 h-3.5" />
                 <span>{simTwoPersons ? '2P' : '1P'}</span>
@@ -1369,14 +1205,11 @@ export default function App() {
         </div>
       </header>
 
-      {/* Panel Inferior: Selector de Accesorios (Gesto Paz ✌️) | Superpoderes Interactivos */}
+      {/* Panel Inferior: Visor Facial | Teclado Manual & Fondo Negro Manual | Guía Clara de los 4 Gestos */}
       <footer className="fixed bottom-0 inset-x-0 z-20 p-3 md:p-4 flex flex-col items-center pointer-events-none">
-        <div className="pointer-events-auto max-w-6xl w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
-          {/* Selector de Modo de Accesorios (También cambiable haciendo el gesto ✌️ Paz) */}
+        <div className="pointer-events-auto max-w-[1440px] w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
+          {/* Grupo Izquierdo: Visor Facial + Órbita Tech */}
           <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/45 p-1.5 rounded-2xl border border-white/10">
-            <span className="hidden 2xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-[#FF6B00] px-2">
-              ✌️ Accesorios
-            </span>
             {ACCESSORY_MODES.map((m, idx) => (
               <button
                 key={m.id}
@@ -1392,69 +1225,102 @@ export default function App() {
                 }`}
               >
                 {m.id === 'OCULUS' && <Glasses className="w-4 h-4" />}
-                {m.id === 'CROWN' && <Crown className="w-4 h-4" />}
+                {m.id === 'CYBER_HUD' && <Terminal className="w-4 h-4" />}
                 {m.id === 'BOTH' && <Zap className="w-4 h-4" />}
-                {m.id === 'HACKER_HUD' && <Terminal className="w-4 h-4" />}
                 <span>{m.shortLabel}</span>
               </button>
             ))}
-          </div>
-
-          {/* Guía Rápida de Superpoderes de Manos & Botones Interactivos */}
-          <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/45 p-1.5 rounded-2xl border border-white/10">
-            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 text-[11px] font-tech text-white/80">
-              <span className="text-[#FF6B00] font-bold">✋ Izq:</span> Esfera IA
-              <span className="text-white/25">|</span>
-              <span className="text-[#FF6B00] font-bold">✋ Der:</span> Escudo Ciber
-              <span className="text-white/25">|</span>
-              <span className="text-[#FF6B00] font-bold">✊ Puño:</span> Mando PS5
-              <span className="text-white/25">|</span>
-              <span className="text-[#FF6B00] font-bold">🙏 Juntar:</span> Fusión Tron
-            </div>
 
             <button
               onClick={() =>
-                setManualKeyboard((prev) => {
+                setOrbitEnabled((prev) => {
+                  const next = !prev;
+                  showBanner(next ? '✨ ÓRBITA TECH ACTIVADA' : 'ÓRBITA TECH OCULTA');
+                  return next;
+                })
+              }
+              aria-pressed={orbitEnabled}
+              className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
+                orbitEnabled
+                  ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
+                  : 'bg-white/5 border-white/10 text-white/60 hover:text-white'
+              }`}
+              title="Activar/Desactivar Órbita 3D de Logos con Colores Oficiales"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Órbita Tech</span>
+            </button>
+          </div>
+
+          {/* Grupo Central: Botones Manuales [ ⌨️ Teclado Holográfico ] y [ ⬛ Fondo Negro / Modo Real ] */}
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              onClick={() =>
+                setManualKeyboardEnabled((prev) => {
                   const next = !prev;
                   showBanner(
                     next
-                      ? '⌨️ TECLADO HOLOGRÁFICO DEVELOPER ACTIVADO'
-                      : 'TECLADO HOLOGRÁFICO EN MODO AUTOMÁTICO'
+                      ? '⌨️ TECLADO HOLOGRÁFICO FIJADO MANUALMENTE'
+                      : '🖐️🖐️ TECLADO EN MODO GESTO (DOS MANOS ABIERTAS)'
                   );
                   return next;
                 })
               }
-              aria-pressed={manualKeyboard}
-              className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
-                manualKeyboard
-                  ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
-                  : 'bg-white/5 border-white/10 text-white/65 hover:text-white'
+              aria-pressed={manualKeyboardEnabled}
+              className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
+                manualKeyboardEnabled
+                  ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                  : 'bg-black/80 hover:bg-black text-white border-[#FF6B00]/60'
               }`}
-              title="Mostrar Teclado Holográfico Flotante en el Aire"
+              title="Activar/Desactivar Teclado Holográfico manualmente con un clic (o levanta ambas manos abiertas)"
             >
               <Keyboard className="w-4 h-4" />
-              <span>Teclado Dev</span>
+              <span>⌨️ Teclado Holográfico</span>
             </button>
 
             <button
               onClick={() =>
-                setHudEnabled((prev) => {
+                setBlackBgEnabled((prev) => {
                   const next = !prev;
-                  showBanner(next ? '✨ ORBITALES & HUD ACTIVADOS' : 'HUD DESACTIVADO');
+                  showBanner(
+                    next
+                      ? '⬛ FONDO NEGRO (RECORTE LIMPIO SELFIE SEGMENTER) ACTIVADO'
+                      : '🎥 MODO REAL (CÁMARA DIRECTA SIN SEGMENTACIÓN) ACTIVADO'
+                  );
                   return next;
                 })
               }
-              aria-pressed={hudEnabled}
-              className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
-                hudEnabled
-                  ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
-                  : 'bg-white/5 border-white/10 text-white/65 hover:text-white'
+              aria-pressed={blackBgEnabled}
+              className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
+                blackBgEnabled
+                  ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                  : 'bg-black/80 hover:bg-black text-white border-[#FF6B00]/60'
               }`}
-              title="Activar/Desactivar Íconos Orbitales de Sistemas"
+              title="Cambiar manualmente entre Modo Real y Fondo Negro con recorte limpio de persona"
             >
-              <Sparkles className="w-4 h-4" />
-              <span>Efectos Orbitales</span>
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>⬛ Fondo Negro / Modo Real</span>
             </button>
+          </div>
+
+          {/* Grupo Derecho: Tarjeta de Guía Clara con los 4 Gestos Activos */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 bg-black/60 px-4 py-2 rounded-2xl border border-[#FF6B00]/40 text-[11px] font-tech text-white/90">
+            <div className="flex items-center gap-1.5">
+              <strong className="text-[#FF6B00] whitespace-nowrap">🖐️ Izq. Abierta:</strong>
+              <span className="truncate">{OFFICIAL_MENTIONS.IA}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <strong className="text-[#FF6B00] whitespace-nowrap">🖐️ Der. Abierta:</strong>
+              <span className="truncate">{OFFICIAL_MENTIONS.CIBER}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <strong className="text-[#FF6B00] whitespace-nowrap">🖐️🖐️ Ambas Abiertas:</strong>
+              <span className="truncate">Teclado Holográfico en el Aire</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <strong className="text-[#FF6B00] whitespace-nowrap">✊✊ Ambos Puños:</strong>
+              <span className="truncate">Mandos Gaming PlayStation</span>
+            </div>
           </div>
         </div>
       </footer>
