@@ -6,24 +6,29 @@ import {
   HandLandmarker,
   ImageSegmenter,
 } from '@mediapipe/tasks-vision';
+import { AR_CONFIG, CAREERS, ASSETS_PATHS } from './config';
 import {
   lerp,
-  lerpAngle,
   clamp,
-  FUTURE_ROLES,
   drawPixelDino,
   drawWalkingShoulderDino,
-  computePalmCenterAndTilt,
+  drawShoulderScalesEmblem,
   drawNeuralBinarySphere,
   drawDigitalFusionCore,
   drawHolographicScales,
   drawLegalTechShield,
   drawMetaverseTronGrid,
   drawSynergyConnectionBeam,
-  processVrHeadsetImage,
-  analyzeHandGesture,
   detectSmileFromFace,
 } from './utils/arHelpers';
+import {
+  extractValidPoses,
+  extractValidFaces,
+  pairFacesToBodies,
+  updateTrackedPersons,
+  updateTrackedHands,
+  stepTrackedHandsFade,
+} from './utils/personTracker';
 import LoadingScreen from './components/LoadingScreen';
 import PhotoModal from './components/PhotoModal';
 import UnifranzLogo from './components/UnifranzLogo';
@@ -33,124 +38,74 @@ import {
   Scale,
   Glasses,
   Sparkles,
-  Hand,
-  Smile,
   RefreshCw,
   Users,
-  Zap,
+  Layers,
 } from 'lucide-react';
 
-const AR_MODES = [
-  {
-    id: 'SIS',
-    shortName: 'Ing. de Sistemas',
-    fullName: 'Ingeniería de Sistemas e Innovación Digital',
-    profileTitle: 'PERFIL: Futuro Ingeniero de Sistemas',
-    profileMode: 'Modo: Innovación Digital & IA',
-    badge: 'NUEVA MALLA 2026 // SIS',
-  },
-  {
-    id: 'DER',
-    shortName: 'Derecho',
-    fullName: 'Derecho, Justicia & Liderazgo Global',
-    profileTitle: 'PERFIL: Futuro Abogado UNIFRANZ',
-    profileMode: 'Modo: Justicia & LegalTech',
-    badge: 'NUEVA MALLA 2026 // DER',
-  },
-  {
-    id: 'VR_ONLY',
-    shortName: 'Metaverso VR',
-    fullName: 'Inmersión Metaverso & Realidad Extendida',
-    profileTitle: 'PERFIL: Explorador XR UNIFRANZ',
-    profileMode: 'Modo: Cyberspace & Visión Futura',
-    badge: 'UNIFRANZ METAVERSE',
-  },
-];
-
-const createPersonSlot = (defaultX = 640, roleIdx = 0) => ({
-  active: false,
-  lostFrames: 0,
-  scanStartTime: 0,
-  rouletteStartTime: 0,
-  roleIndex: roleIdx,
-  shoulderCenterX: defaultX,
-  shoulderCenterY: 360,
-  hipCenterX: defaultX,
-  hipCenterY: 610,
-  shoulderWidth: 210,
-  torsoHeight: 260,
-  shoulderAngle: 0,
-  hasFace: false,
-  faceLostFrames: 0,
-  eyeCenterX: defaultX,
-  eyeCenterY: 200,
-  eyeDistance: 72,
-  headRoll: 0,
-  headYaw: 0,
-  headPitch: 0,
-});
-
 export default function App() {
-  // Primary Career & Second Person (Synergy Mode) Career
-  const [selectedCareer, setSelectedCareer] = useState('SIS'); // 'SIS' | 'DER' | 'VR_ONLY'
-  const [secondPersonCareer, setSecondPersonCareer] = useState('SAME'); // 'SAME' | 'SIS' | 'DER'
-  const [vrEnabled, setVrEnabled] = useState(true);
-  const [hudEnabled, setHudEnabled] = useState(true);
+  // === Estado de filtros separado en Carrera (única) y Accesorios (independientes) ===
+  // La carrera y los accesorios SOLO cambian mediante los botones de la interfaz.
+  const [carrera, setCarrera] = useState('sistemas'); // 'derecho' | 'sistemas'
+  const [accesorios, setAccesorios] = useState({
+    lentesVR: true,
+    hud: true,
+  });
+  const [fondoMetaverso, setFondoMetaverso] = useState(false);
   const [simTwoPersons, setSimTwoPersons] = useState(false);
 
-  // Loading & Error States
+  // Estados de carga y modal
   const [loadingProgress, setLoadingProgress] = useState(10);
-  const [loadingStatus, setLoadingStatus] = useState('Inicializando motor neuronal MediaPipe...');
+  const [loadingStatus, setLoadingStatus] = useState('Inicializando motor neuronal MediaPipe GPU...');
   const [cameraError, setCameraError] = useState(null);
   const [isReady, setIsReady] = useState(false);
   const [isSimulationMode, setIsSimulationMode] = useState(false);
 
-  // Interactive HUD Feedback States
-  const [proximityLevel, setProximityLevel] = useState(0.25);
-  const [detectedCount, setDetectedCount] = useState(0);
+  // Feedback de interfaz (solo eventos discretos, nunca por cuadro)
   const [gestureBanner, setGestureBanner] = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [flashActive, setFlashActive] = useState(false);
   const [capturedPhoto, setCapturedPhoto] = useState(null);
-  const [fpsCount, setFpsCount] = useState(60);
 
-  // Refs for 60 FPS loop
+  // Refs de DOM y Canvas
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
+  const fpsSpanRef = useRef(null);
+  const peopleSpanRef = useRef(null);
+
+  // Canvases offscreen reutilizables (detección <= 640x480 y segmentación suavizada)
+  const detectCanvasRef = useRef(null);
   const fgCanvasRef = useRef(null);
   const maskCanvasRef = useRef(null);
+  const smoothMaskCanvasRef = useRef(null);
+  const hasSegCacheRef = useRef(false);
 
-  // Mirror state ref for inside requestAnimationFrame
+  // Espejo del estado en Ref para lectura instantánea dentro de requestAnimationFrame
   const stateRef = useRef({
-    selectedCareer: 'SIS',
-    secondPersonCareer: 'SAME',
-    vrEnabled: true,
-    hudEnabled: true,
+    carrera: 'sistemas',
+    lentesVR: true,
+    hud: true,
+    fondoMetaverso: false,
     isSimulationMode: false,
     simTwoPersons: false,
     countdownActive: false,
   });
 
   useEffect(() => {
-    stateRef.current.selectedCareer = selectedCareer;
-    stateRef.current.secondPersonCareer = secondPersonCareer;
-    stateRef.current.vrEnabled = vrEnabled;
-    stateRef.current.hudEnabled = hudEnabled;
+    stateRef.current.carrera = carrera;
+    stateRef.current.lentesVR = accesorios.lentesVR;
+    stateRef.current.hud = accesorios.hud;
+    stateRef.current.fondoMetaverso = fondoMetaverso;
     stateRef.current.isSimulationMode = isSimulationMode;
     stateRef.current.simTwoPersons = simTwoPersons;
     stateRef.current.countdownActive = countdown !== null;
-  }, [
-    selectedCareer,
-    secondPersonCareer,
-    vrEnabled,
-    hudEnabled,
-    isSimulationMode,
-    simTwoPersons,
-    countdown,
-  ]);
+    if (!fondoMetaverso) {
+      hasSegCacheRef.current = false;
+    }
+  }, [carrera, accesorios, fondoMetaverso, isSimulationMode, simTwoPersons, countdown]);
 
-  // MediaPipe Landmarkers & ImageSegmenter Ref
+  // Modelos MediaPipe
   const landmarkersRef = useRef({
     pose: null,
     face: null,
@@ -158,7 +113,7 @@ export default function App() {
     segmenter: null,
   });
 
-  // Preloaded Image Assets Ref
+  // Imágenes PNG precargadas una sola vez al iniciar
   const assetsRef = useRef({
     shirtSis: null,
     shirtDer: null,
@@ -166,38 +121,37 @@ export default function App() {
     logoImg: null,
   });
 
-  // Multi-Person & Particle Tracking State Ref
+  // Estado de seguimiento multi-persona, manos y partículas (100% en useRef)
   const trackingRef = useRef({
-    persons: [createPersonSlot(480, 0), createPersonSlot(860, 1)],
+    trackedPersons: [],
+    trackedHands: [],
     proximity: 0.25,
-    lastModeSwitchTime: 0,
     lastPhotoTriggerTime: 0,
-    openHandHoldFrames: 0,
     peaceOrSmileHoldFrames: 0,
     shockwaves: [],
     particles: [],
     burstParticles: [],
   });
 
-  // Initialize ambient floating particles
+  // Inicializar partículas ambientales ligeras
   useEffect(() => {
     const pts = [];
-    for (let i = 0; i < 44; i++) {
+    for (let i = 0; i < 24; i++) {
       pts.push({
         x: Math.random(),
         y: Math.random(),
-        vx: (Math.random() - 0.5) * 0.0012,
-        vy: -0.0012 - Math.random() * 0.0022,
-        size: 10 + Math.random() * 12,
-        type: i % 6 === 0 ? 'DINO' : i % 3 === 0 ? 'AI' : i % 2 === 0 ? '0' : '1',
-        alpha: 0.25 + Math.random() * 0.65,
+        vx: (Math.random() - 0.5) * 0.001,
+        vy: -0.001 - Math.random() * 0.0018,
+        size: 10 + Math.random() * 8,
+        type: i % 5 === 0 ? 'DINO' : i % 3 === 0 ? 'AI' : i % 2 === 0 ? '0' : '1',
+        alpha: 0.25 + Math.random() * 0.55,
         color: Math.random() > 0.35 ? '#FF6B00' : '#FFFFFF',
       });
     }
     trackingRef.current.particles = pts;
   }, []);
 
-  // Load AR PNG/SVG assets
+  // Precargar assets una sola vez al inicio
   const preloadAssets = useCallback(async () => {
     const loadImg = (src, fallbackSrc = null) =>
       new Promise((resolve) => {
@@ -218,29 +172,29 @@ export default function App() {
         img.src = src;
       });
 
-    const [sisImg, derImg, vrRawImg, logoImg] = await Promise.all([
-      loadImg('/assets/POLERA-SIS.png'),
-      loadImg('/assets/POLERA-DER.png'),
-      loadImg('/assets/LENTES-VR.jpg', '/assets/LENTES-VR.png'),
-      loadImg('/assets/logo-unifranz.png', '/assets/logo-unifranz.svg'),
+    const [sisImg, derImg, vrImg, logoImg] = await Promise.all([
+      loadImg(CAREERS.sistemas.shirtPath),
+      loadImg(CAREERS.derecho.shirtPath),
+      loadImg(ASSETS_PATHS.vrHeadset),
+      loadImg(ASSETS_PATHS.logoPng, ASSETS_PATHS.logoSvg),
     ]);
 
     assetsRef.current.shirtSis = sisImg;
     assetsRef.current.shirtDer = derImg;
-    assetsRef.current.vrHeadset = vrRawImg ? processVrHeadsetImage(vrRawImg) : null;
+    assetsRef.current.vrHeadset = vrImg;
     assetsRef.current.logoImg = logoImg;
   }, []);
 
-  // Initialize Camera and MediaPipe Models (Pose x2, Face x2, Hand x4, ImageSegmenter)
+  // Inicializar cámara y modelos MediaPipe GPU
   const initExperience = useCallback(
     async (useSimulation = false) => {
       setCameraError(null);
       setLoadingProgress(15);
-      setLoadingStatus('Cargando prendas Nueva Malla 2026 y visor VR...');
+      setLoadingStatus('Precargando filtros PNG optimizados...');
       await preloadAssets();
 
       setLoadingProgress(35);
-      setLoadingStatus('Solicitando acceso a cámara de alta velocidad...');
+      setLoadingStatus('Solicitando acceso a cámara...');
 
       if (!useSimulation) {
         try {
@@ -249,7 +203,7 @@ export default function App() {
               width: { ideal: 1280 },
               height: { ideal: 720 },
               facingMode: 'user',
-              frameRate: { ideal: 60 },
+              frameRate: { ideal: 30 },
             },
             audio: false,
           });
@@ -259,7 +213,7 @@ export default function App() {
           }
         } catch (err) {
           setCameraError(
-            'No se detectó una cámara disponible o el permiso fue denegado. Puedes reintentar o activar el Modo Simulación Holográfica (soporta 1 o 2 personas en Modo Sinergia).'
+            'No se detectó una cámara disponible o el permiso fue denegado. Puedes reintentar o activar el Modo Simulación Holográfica.'
           );
           return;
         }
@@ -268,7 +222,7 @@ export default function App() {
       }
 
       setLoadingProgress(60);
-      setLoadingStatus('Cargando MediaPipe Multi-Pose, Face, Hand & ImageSegmenter...');
+      setLoadingStatus('Cargando PoseLandmarker, FaceLandmarker y HandLandmarker (GPU)...');
 
       try {
         const vision = await FilesetResolver.forVisionTasks(
@@ -284,7 +238,10 @@ export default function App() {
               delegate: 'GPU',
             },
             runningMode: 'VIDEO',
-            numPoses: 2,
+            numPoses: AR_CONFIG.MAX_PERSONS,
+            minPoseDetectionConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
+            minPosePresenceConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
+            minTrackingConfidence: AR_CONFIG.VISIBILITY_THRESHOLD,
           }),
           FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
@@ -293,7 +250,10 @@ export default function App() {
               delegate: 'GPU',
             },
             runningMode: 'VIDEO',
-            numFaces: 2,
+            numFaces: AR_CONFIG.MAX_PERSONS,
+            minFaceDetectionConfidence: AR_CONFIG.FACE_DETECTION_CONFIDENCE,
+            minFacePresenceConfidence: AR_CONFIG.FACE_PRESENCE_CONFIDENCE,
+            minTrackingConfidence: AR_CONFIG.FACE_TRACKING_CONFIDENCE,
             outputFaceBlendshapes: true,
           }),
           HandLandmarker.createFromOptions(vision, {
@@ -303,11 +263,10 @@ export default function App() {
               delegate: 'GPU',
             },
             runningMode: 'VIDEO',
-            numHands: 4,
+            numHands: AR_CONFIG.MAX_HANDS,
           }),
         ]);
 
-        // Load ImageSegmenter for UNIFRANZ Metaverse VR Cyberspace effect
         let imageSegmenter = null;
         try {
           imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
@@ -321,7 +280,7 @@ export default function App() {
             outputConfidenceMasks: true,
           });
         } catch (segErr) {
-          console.warn('Selfie Segmenter fallback:', segErr);
+          console.warn('ImageSegmenter opcional no disponible:', segErr);
         }
 
         landmarkersRef.current = {
@@ -331,12 +290,12 @@ export default function App() {
           segmenter: imageSegmenter,
         };
       } catch (visionErr) {
-        console.warn('MediaPipe initialization warning:', visionErr);
+        console.warn('Error inicializando MediaPipe:', visionErr);
       }
 
       setLoadingProgress(100);
       setLoadingStatus('¡Espejo AR UNIFRANZ • Nueva Malla 2026 Listo!');
-      setTimeout(() => setIsReady(true), 350);
+      setTimeout(() => setIsReady(true), 250);
     },
     [preloadAssets]
   );
@@ -351,70 +310,62 @@ export default function App() {
     };
   }, [initExperience]);
 
-  // Spawn an orange energy shockwave
-  const triggerEnergyShockwave = useCallback((normX = 0.5, normY = 0.45, label = '') => {
-    trackingRef.current.shockwaves.push({
-      x: normX,
-      y: normY,
-      radius: 10,
-      maxRadius: Math.max(window.innerWidth, window.innerHeight) * 0.75,
-      alpha: 1,
-    });
-    if (label) {
-      setGestureBanner(label);
-      setTimeout(() => setGestureBanner(null), 2400);
-    }
+  const showBanner = useCallback((label) => {
+    if (!label) return;
+    setGestureBanner(label);
+    setTimeout(() => setGestureBanner(null), 2200);
   }, []);
 
-  // Re-spin the Holographic Career Role Roulette ("🔄 Nuevo Perfil")
+  const triggerEnergyShockwave = useCallback(
+    (normX = 0.5, normY = 0.45, label = '') => {
+      trackingRef.current.shockwaves.push({
+        x: normX,
+        y: normY,
+        radius: 12,
+        maxRadius: Math.max(window.innerWidth, window.innerHeight) * 0.65,
+        alpha: 0.9,
+      });
+      showBanner(label);
+    },
+    [showBanner]
+  );
+
+  // Girar ruleta de rol profesional para todas las personas rastreadas
   const spinRoleRoulette = useCallback(() => {
     const now = performance.now();
-    trackingRef.current.persons.forEach((p, idx) => {
+    trackingRef.current.trackedPersons.forEach((p) => {
       p.rouletteStartTime = now;
       p.scanStartTime = now;
       p.roleIndex = (p.roleIndex + 1 + Math.floor(Math.random() * 3)) % 4;
     });
-    triggerEnergyShockwave(0.5, 0.35, '🎰 RULETA HOLOGRÁFICA: ESCANEANDO ROL DEL FUTURO...');
+    triggerEnergyShockwave(0.5, 0.35, '🎰 RULETA HOLOGRÁFICA: NUEVO PERFIL ASIGNADO');
   }, [triggerEnergyShockwave]);
 
-  // Cycle between SIS -> DER -> VR_ONLY
-  const cycleArMode = useCallback(
-    (handPos = { x: 0.5, y: 0.45 }, fromGesture = false) => {
-      const current = stateRef.current.selectedCareer;
-      let nextMode = 'SIS';
-      if (current === 'SIS') nextMode = 'DER';
-      else if (current === 'DER') nextMode = 'VR_ONLY';
-      else nextMode = 'SIS';
-
-      setSelectedCareer(nextMode);
-      if (nextMode === 'VR_ONLY') {
-        setVrEnabled(true);
-      }
+  // Cambiar carrera ÚNICAMENTE mediante los botones de la interfaz
+  const selectCarrera = useCallback(
+    (nextCarrera) => {
+      setCarrera(nextCarrera);
       const now = performance.now();
-      trackingRef.current.persons.forEach((p) => {
+      trackingRef.current.trackedPersons.forEach((p) => {
         p.scanStartTime = now;
         p.rouletteStartTime = now;
       });
-
-      const modeObj = AR_MODES.find((m) => m.id === nextMode);
-      triggerEnergyShockwave(
-        handPos.x,
-        handPos.y,
-        fromGesture
-          ? `✋ GESTO DETECTADO: ${modeObj.shortName.toUpperCase()}`
-          : `MODO ACTIVO: ${modeObj.shortName.toUpperCase()}`
-      );
+      const label =
+        nextCarrera === 'derecho'
+          ? '⚖️ DERECHO • BALANZA HOLOGRÁFICA & ESCUDO LEGALTECH'
+          : '💻 ING. DE SISTEMAS • ESFERAS IA & DINO PIXEL';
+      triggerEnergyShockwave(0.5, 0.5, label);
     },
     [triggerEnergyShockwave]
   );
 
-  // Capture High-Resolution Commemorative Photo with UNIFRANZ Launch Frame (includes all AR layers & hand holograms)
+  // Capturar Foto Souvenir directamente desde el canvas en vivo
   const captureCommemorativePhoto = useCallback(() => {
     const mainCanvas = canvasRef.current;
     if (!mainCanvas) return;
 
     setFlashActive(true);
-    setTimeout(() => setFlashActive(false), 380);
+    setTimeout(() => setFlashActive(false), 320);
 
     const outCanvas = document.createElement('canvas');
     const W = 1280;
@@ -451,13 +402,11 @@ export default function App() {
     ctx.drawImage(mainCanvas, offsetX, offsetY, drawW, drawH);
     ctx.restore();
 
-    // Neon Orange Outer Frame Border
     ctx.strokeStyle = '#FF6B00';
     ctx.lineWidth = 5;
     ctx.strokeRect(18, 18, W - 36, H - 36);
 
-    // Top-left Launch Badge
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.85)';
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.88)';
     ctx.fillRect(36, 36, 330, 44);
     ctx.strokeStyle = '#FF6B00';
     ctx.lineWidth = 2;
@@ -465,10 +414,9 @@ export default function App() {
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '800 14px "Orbitron", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('LANZAMIENTO NUEVA MALLA 2026', 201, 63);
+    ctx.fillText('INAUGURACIÓN NUEVA MALLA 2026', 201, 63);
 
-    // Top-right Event Tag
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.85)';
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.88)';
     ctx.fillRect(W - 310, 36, 270, 44);
     ctx.strokeStyle = '#FF6B00';
     ctx.lineWidth = 2;
@@ -478,7 +426,6 @@ export default function App() {
     ctx.textAlign = 'center';
     ctx.fillText('#InnovaciónUnifranz', W - 175, 64);
 
-    // Bottom Commemorative Footer Bar
     const footerY = H - 145;
     const footerGrad = ctx.createLinearGradient(0, footerY, W, H);
     footerGrad.addColorStop(0, '#0D0D0D');
@@ -499,11 +446,10 @@ export default function App() {
       ctx.fillText('UNIFRANZ', 46, footerY + 68);
     }
 
-    const activeMode =
-      AR_MODES.find((m) => m.id === stateRef.current.selectedCareer) || AR_MODES[0];
-    const p0 = trackingRef.current.persons[0];
-    const assignedRole =
-      (FUTURE_ROLES[stateRef.current.selectedCareer] || FUTURE_ROLES.SIS)[p0.roleIndex % 4];
+    const activeCareer = CAREERS[stateRef.current.carrera] || CAREERS.sistemas;
+    const firstPerson = trackingRef.current.trackedPersons[0];
+    const roleIdx = firstPerson ? firstPerson.roleIndex % activeCareer.roles.length : 0;
+    const assignedRole = activeCareer.roles[roleIdx];
     const nowStr = new Date().toLocaleDateString('es-BO', {
       year: 'numeric',
       month: 'short',
@@ -515,7 +461,7 @@ export default function App() {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#FF6B00';
     ctx.font = '800 20px "Orbitron", sans-serif';
-    ctx.fillText(activeMode.fullName.toUpperCase(), W - 48, footerY + 46);
+    ctx.fillText(activeCareer.fullName.toUpperCase(), W - 48, footerY + 46);
 
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '700 15px "Space Grotesk", sans-serif';
@@ -524,27 +470,28 @@ export default function App() {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
     ctx.font = '600 13px "Space Grotesk", sans-serif';
     ctx.fillText(
-      `UNIFRANZ AR MIRROR  •  ${nowStr}  •  #InnovaciónUnifranz`,
+      `UNIFRANZ AR MIRROR  •  ${activeCareer.shortName.toUpperCase()}  •  ${nowStr}  •  #InnovaciónUnifranz`,
       W - 48,
       footerY + 98
     );
 
-    const framedDataUrl = outCanvas.toDataURL('image/png', 0.94);
+    const framedDataUrl = outCanvas.toDataURL('image/png', 0.92);
     const qrUrl = `${window.location.origin}/?souvenir=UNIFRANZ-AR&carrera=${encodeURIComponent(
-      activeMode.shortName
+      activeCareer.shortName
     )}&rol=${encodeURIComponent(assignedRole)}&fecha=${encodeURIComponent(
       nowStr
     )}&tag=InnovacionUnifranz`;
 
     setCapturedPhoto({
       framedDataUrl,
-      careerLabel: `${activeMode.shortName} • ${assignedRole}`,
+      careerShort: activeCareer.shortName,
+      careerLabel: `${activeCareer.shortName} • ${assignedRole}`,
       timestamp: nowStr,
       sharePayload: qrUrl,
     });
   }, []);
 
-  // Trigger 3... 2... 1... Holographic Countdown
+  // Temporizador 3... 2... 1...
   const startPhotoCountdown = useCallback(
     (reasonText = '📸 INICIANDO CAPTURA SOUVENIR') => {
       if (stateRef.current.countdownActive) return;
@@ -562,25 +509,34 @@ export default function App() {
           setGestureBanner(null);
           captureCommemorativePhoto();
         }
-      }, 950);
+      }, 900);
     },
     [captureCommemorativePhoto]
   );
 
-  // Main 60 FPS Render & Multi-Person Computer Vision Loop
+  // Bucle único de renderizado y detección (requestAnimationFrame)
   useEffect(() => {
     if (!isReady) return;
 
     let lastFpsUpdate = performance.now();
     let frameCounter = 0;
     let lastVideoTime = -1;
+    let detectTick = 0;
+    let lastDetectTs = 0;
 
     const renderLoop = (now) => {
       rafRef.current = requestAnimationFrame(renderLoop);
 
       frameCounter++;
-      if (now - lastFpsUpdate >= 500) {
-        setFpsCount(Math.min(60, Math.round((frameCounter * 1000) / (now - lastFpsUpdate))));
+      const fpsElapsed = now - lastFpsUpdate;
+      if (fpsElapsed >= 500) {
+        const realFps = Math.round((frameCounter * 1000) / fpsElapsed);
+        if (fpsSpanRef.current) {
+          fpsSpanRef.current.textContent = `${realFps} FPS`;
+        }
+        if (peopleSpanRef.current) {
+          peopleSpanRef.current.textContent = `${trackingRef.current.trackedPersons.length}`;
+        }
         frameCounter = 0;
         lastFpsUpdate = now;
       }
@@ -599,17 +555,15 @@ export default function App() {
       const H = canvas.height;
       const tState = trackingRef.current;
       const {
-        selectedCareer: primaryMode,
-        secondPersonCareer: p2CareerSetting,
-        vrEnabled: showVr,
-        hudEnabled: showHud,
+        carrera: activeCarreraKey,
+        lentesVR: showVr,
+        hud: showHud,
+        fondoMetaverso: useSegBg,
         isSimulationMode: sim,
         simTwoPersons: sim2P,
       } = stateRef.current;
+      const activeCareer = CAREERS[activeCarreraKey] || CAREERS.sistemas;
 
-      ctx.clearRect(0, 0, W, H);
-
-      // Compute mirrored video viewport transform
       let drawX = 0;
       let drawY = 0;
       let drawW = W;
@@ -635,122 +589,167 @@ export default function App() {
       const toScreenX = (normX) => drawX + (1 - normX) * drawW;
       const toScreenY = (normY) => drawY + normY * drawH;
 
-      // 1. Execute MediaPipe Vision Tasks (Multi-Pose, Multi-Face, Multi-Hand, ImageSegmenter)
-      let rawPoses = [];
-      let rawFaces = [];
-      let faceBlendshapes = [];
-      let handResults = null;
-      let segMaskApplied = false;
-
+      // === 1. DETECCIÓN A BAJA RESOLUCIÓN (<= 640x480) EN CUADROS ALTERNOS ===
       if (!sim && video && video.readyState >= 2) {
-        const ts = performance.now();
-        const isNewFrame = video.currentTime !== lastVideoTime;
-        if (isNewFrame) {
+        const isNewVideoFrame = video.currentTime !== lastVideoTime;
+
+        if (isNewVideoFrame) {
           lastVideoTime = video.currentTime;
-        }
+          detectTick++;
 
-        try {
-          if (landmarkersRef.current.pose) {
-            const pRes = landmarkersRef.current.pose.detectForVideo(video, ts);
-            if (pRes?.landmarks) rawPoses = pRes.landmarks;
+          if (!detectCanvasRef.current) {
+            detectCanvasRef.current = document.createElement('canvas');
           }
-          if (landmarkersRef.current.face) {
-            const fRes = landmarkersRef.current.face.detectForVideo(video, ts);
-            if (fRes?.faceLandmarks) {
-              rawFaces = fRes.faceLandmarks;
-              faceBlendshapes = fRes.faceBlendshapes || [];
+          const dCanvas = detectCanvasRef.current;
+          const vW = video.videoWidth || 640;
+          const vH = video.videoHeight || 480;
+          const scale = Math.min(
+            AR_CONFIG.DETECTION_MAX_WIDTH / vW,
+            AR_CONFIG.DETECTION_MAX_HEIGHT / vH,
+            1
+          );
+          const detW = Math.max(160, Math.round(vW * scale));
+          const detH = Math.max(120, Math.round(vH * scale));
+          if (dCanvas.width !== detW || dCanvas.height !== detH) {
+            dCanvas.width = detW;
+            dCanvas.height = detH;
+          }
+          const dCtx = dCanvas.getContext('2d', { willReadFrequently: false });
+          dCtx.drawImage(video, 0, 0, detW, detH);
+
+          const ts = Math.max(lastDetectTs + 1, Math.round(now));
+          lastDetectTs = ts;
+
+          const runPoseFace = detectTick % AR_CONFIG.DETECTION_STRIDE_FRAMES === 0;
+          const runHands = !runPoseFace;
+
+          if (runPoseFace) {
+            let rawPoses = [];
+            let rawFaces = [];
+            let faceBlendshapes = [];
+
+            try {
+              if (landmarkersRef.current.pose) {
+                const pRes = landmarkersRef.current.pose.detectForVideo(dCanvas, ts);
+                if (pRes?.landmarks) rawPoses = pRes.landmarks;
+              }
+              if (landmarkersRef.current.face) {
+                const fRes = landmarkersRef.current.face.detectForVideo(dCanvas, ts);
+                if (fRes?.faceLandmarks) {
+                  rawFaces = fRes.faceLandmarks;
+                  faceBlendshapes = fRes.faceBlendshapes || [];
+                }
+              }
+            } catch (e) {
+              // Continuar con el último estado suavizado
+            }
+
+            const validPoses = extractValidPoses(rawPoses, toScreenX, toScreenY);
+            const validFaces = extractValidFaces(rawFaces, faceBlendshapes, toScreenX, toScreenY);
+            const detections = pairFacesToBodies(validPoses, validFaces, W);
+            updateTrackedPersons(tState.trackedPersons, detections, W, now);
+          }
+
+          if (runHands && landmarkersRef.current.hand) {
+            try {
+              const handRes = landmarkersRef.current.hand.detectForVideo(dCanvas, ts);
+              updateTrackedHands(
+                tState.trackedHands,
+                handRes?.landmarks || [],
+                tState.trackedPersons,
+                toScreenX,
+                toScreenY,
+                W,
+                now
+              );
+            } catch (e) {
+              // Continuar con el último estado suavizado
             }
           }
-          if (landmarkersRef.current.hand) {
-            handResults = landmarkersRef.current.hand.detectForVideo(video, ts);
-          }
-        } catch (e) {
-          // Continue smoothly
-        }
 
-        // 2. Render Background & Person Segmentation ("Metaverso UNIFRANZ" when VR Glasses are enabled)
-        if (showVr && landmarkersRef.current.segmenter) {
-          try {
-            const segResult = landmarkersRef.current.segmenter.segmentForVideo(video, ts);
-            if (segResult?.confidenceMasks?.length > 0) {
-              const mask = segResult.confidenceMasks[0];
-              const mW = mask.width;
-              const mH = mask.height;
-              const maskFloat = mask.getAsFloat32Array();
+          if (runHands && useSegBg && landmarkersRef.current.segmenter) {
+            try {
+              const segResult = landmarkersRef.current.segmenter.segmentForVideo(dCanvas, ts);
+              if (segResult?.confidenceMasks?.length > 0) {
+                const mask = segResult.confidenceMasks[0];
+                const mW = mask.width;
+                const mH = mask.height;
+                const maskFloat = mask.getAsFloat32Array();
 
-              // Draw Tron / Cyberspace perspective grid on main canvas
-              drawMetaverseTronGrid(ctx, W, H, now);
+                if (!maskCanvasRef.current) {
+                  maskCanvasRef.current = document.createElement('canvas');
+                  smoothMaskCanvasRef.current = document.createElement('canvas');
+                  fgCanvasRef.current = document.createElement('canvas');
+                }
+                const mCanvas = maskCanvasRef.current;
+                const smCanvas = smoothMaskCanvasRef.current;
+                const fCanvas = fgCanvasRef.current;
 
-              // Prepare offscreen mask & foreground canvases (downscaled for 60 FPS speed)
-              if (!maskCanvasRef.current) {
-                maskCanvasRef.current = document.createElement('canvas');
-                fgCanvasRef.current = document.createElement('canvas');
+                if (mCanvas.width !== mW || mCanvas.height !== mH) {
+                  mCanvas.width = mW;
+                  mCanvas.height = mH;
+                  smCanvas.width = mW;
+                  smCanvas.height = mH;
+                  fCanvas.width = detW;
+                  fCanvas.height = detH;
+                }
+
+                const mCtx = mCanvas.getContext('2d');
+                const imgData = mCtx.createImageData(mW, mH);
+                const d = imgData.data;
+                for (let i = 0; i < maskFloat.length; i++) {
+                  const conf = maskFloat[i];
+                  const idx = i * 4;
+                  d[idx] = 255;
+                  d[idx + 1] = 255;
+                  d[idx + 2] = 255;
+                  d[idx + 3] = conf > 0.3 ? Math.min(255, Math.floor(((conf - 0.25) / 0.5) * 255)) : 0;
+                }
+                mCtx.putImageData(imgData, 0, 0);
+
+                const smCtx = smCanvas.getContext('2d');
+                smCtx.clearRect(0, 0, mW, mH);
+                smCtx.filter = 'blur(2.5px)';
+                smCtx.drawImage(mCanvas, 0, 0, mW, mH);
+                smCtx.filter = 'none';
+
+                const fCtx = fCanvas.getContext('2d');
+                fCtx.clearRect(0, 0, detW, detH);
+                fCtx.drawImage(dCanvas, 0, 0, detW, detH);
+                fCtx.globalCompositeOperation = 'destination-in';
+                fCtx.drawImage(smCanvas, 0, 0, detW, detH);
+                fCtx.globalCompositeOperation = 'source-over';
+
+                mask.close();
+                hasSegCacheRef.current = true;
               }
-              const mCanvas = maskCanvasRef.current;
-              const fCanvas = fgCanvasRef.current;
-              if (mCanvas.width !== mW || mCanvas.height !== mH) {
-                mCanvas.width = mW;
-                mCanvas.height = mH;
-                fCanvas.width = mW;
-                fCanvas.height = mH;
-              }
-
-              const mCtx = mCanvas.getContext('2d');
-              const imgData = mCtx.createImageData(mW, mH);
-              const d = imgData.data;
-              for (let i = 0; i < maskFloat.length; i++) {
-                const conf = maskFloat[i];
-                const idx = i * 4;
-                d[idx] = 255;
-                d[idx + 1] = 255;
-                d[idx + 2] = 255;
-                // Smooth person edge feathering
-                d[idx + 3] = conf > 0.35 ? Math.min(255, Math.floor(((conf - 0.25) / 0.45) * 255)) : 0;
-              }
-              mCtx.putImageData(imgData, 0, 0);
-
-              const fCtx = fCanvas.getContext('2d');
-              fCtx.clearRect(0, 0, mW, mH);
-              fCtx.drawImage(video, 0, 0, mW, mH);
-              fCtx.globalCompositeOperation = 'destination-in';
-              fCtx.drawImage(mCanvas, 0, 0, mW, mH);
-              fCtx.globalCompositeOperation = 'source-over';
-
-              // Draw sharp segmented person mirrored over the Tron cyberspace background
-              ctx.save();
-              ctx.translate(W, 0);
-              ctx.scale(-1, 1);
-              ctx.shadowColor = '#FF6B00';
-              ctx.shadowBlur = 18;
-              ctx.drawImage(fCanvas, W - drawX - drawW, drawY, drawW, drawH);
-              ctx.restore();
-
-              mask.close();
-              segMaskApplied = true;
+            } catch (segErr) {
+              // Ignorar error transitorio
             }
-          } catch (segErr) {
-            // Fallback if mask read fails
           }
         }
 
-        if (!segMaskApplied) {
-          // Standard mirrored video feed (plus optional cyberspace grid overlay if VR enabled without segmenter)
+        // Actualizar desvanecimiento suave de manos que salen de cuadro
+        stepTrackedHandsFade(tState.trackedHands, now);
+
+        // === 2. DIBUJAR FONDO + VIDEO ESPEJO ===
+        if (useSegBg && hasSegCacheRef.current && fgCanvasRef.current) {
+          drawMetaverseTronGrid(ctx, W, H, now);
+          ctx.save();
+          ctx.translate(W, 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(fgCanvasRef.current, W - drawX - drawW, drawY, drawW, drawH);
+          ctx.restore();
+        } else {
           ctx.save();
           ctx.translate(W, 0);
           ctx.scale(-1, 1);
           ctx.drawImage(video, W - drawX - drawW, drawY, drawW, drawH);
           ctx.restore();
-
-          if (showVr) {
-            ctx.save();
-            ctx.globalAlpha = 0.28;
-            drawMetaverseTronGrid(ctx, W, H, now);
-            ctx.restore();
-          }
         }
-      } else {
-        // Simulation Mode Backdrop (Tron Cyberspace when VR active, Dark Studio otherwise)
-        if (showVr) {
+      } else if (sim) {
+        // === MODO SIMULACIÓN HOLOGRÁFICA ===
+        if (useSegBg) {
           drawMetaverseTronGrid(ctx, W, H, now);
         } else {
           const bgGrad = ctx.createRadialGradient(W * 0.5, H * 0.45, 50, W * 0.5, H * 0.5, W * 0.8);
@@ -761,22 +760,26 @@ export default function App() {
           ctx.fillRect(0, 0, W, H);
         }
 
-        // Generate synthetic landmarks for 1 or 2 simulated people + interactive hands
         const breath = Math.sin(now * 0.0025) * 0.008;
         const sway = Math.sin(now * 0.0014) * 0.014;
         const centers = sim2P ? [0.68, 0.32] : [0.5];
 
-        rawPoses = centers.map((cx, idx) => {
+        const simPoses = centers.map((cx, idx) => {
           const p = [];
           const s = sway * (idx === 0 ? 1 : -1);
-          p[11] = { x: cx + 0.11 + s, y: 0.43 + breath, z: 0 };
-          p[12] = { x: cx - 0.11 + s, y: 0.43 - breath * 0.5, z: 0 };
-          p[23] = { x: cx + 0.08 + s, y: 0.77 + breath, z: 0 };
-          p[24] = { x: cx - 0.08 + s, y: 0.77 + breath, z: 0 };
+          p[0] = { x: cx + s, y: 0.27 + breath, z: 0, visibility: 1 };
+          p[2] = { x: cx + 0.025 + s, y: 0.25 + breath, z: 0, visibility: 1 };
+          p[5] = { x: cx - 0.025 + s, y: 0.25 + breath, z: 0, visibility: 1 };
+          p[7] = { x: cx + 0.055 + s, y: 0.25 + breath, z: 0, visibility: 1 };
+          p[8] = { x: cx - 0.055 + s, y: 0.25 + breath, z: 0, visibility: 1 };
+          p[11] = { x: cx + 0.11 + s, y: 0.43 + breath, z: 0, visibility: 1 };
+          p[12] = { x: cx - 0.11 + s, y: 0.43 - breath * 0.5, z: 0, visibility: 1 };
+          p[23] = { x: cx + 0.08 + s, y: 0.77 + breath, z: 0, visibility: 1 };
+          p[24] = { x: cx - 0.08 + s, y: 0.77 + breath, z: 0, visibility: 1 };
           return p;
         });
 
-        rawFaces = centers.map((cx, idx) => {
+        const simFaces = centers.map((cx, idx) => {
           const f = [];
           const s = sway * (idx === 0 ? 1 : -1);
           f[33] = { x: cx + 0.042 + s, y: 0.25 + breath, z: 0 };
@@ -785,7 +788,11 @@ export default function App() {
           return f;
         });
 
-        // Simulated raised hands so hand holograms are visible in Simulation Mode too
+        const validPoses = extractValidPoses(simPoses, toScreenX, toScreenY);
+        const validFaces = extractValidFaces(simFaces, [], toScreenX, toScreenY);
+        const detections = pairFacesToBodies(validPoses, validFaces, W);
+        updateTrackedPersons(tState.trackedPersons, detections, W, now);
+
         const handOsc = Math.sin(now * 0.002) * 0.05;
         const c0 = centers[0];
         const makeSimHand = (hx, hy) => {
@@ -801,276 +808,112 @@ export default function App() {
           arr[10] = { x: hx, y: hy - 0.03, z: 0 };
           return arr;
         };
-        handResults = {
-          landmarks: [
+        updateTrackedHands(
+          tState.trackedHands,
+          [
             makeSimHand(c0 - 0.14 + handOsc, 0.46 + breath),
             makeSimHand(c0 + 0.14 - handOsc, 0.46 - breath),
           ],
-        };
-      }
-
-      // 3. Sort & Match up to 2 Detected Persons (Left-to-Right on Mirrored Screen)
-      const sortedPoses = [...rawPoses]
-        .filter((lm) => lm && lm[11] && lm[12])
-        .sort((a, b) => {
-          const ax = toScreenX((a[11].x + a[12].x) / 2);
-          const bx = toScreenX((b[11].x + b[12].x) / 2);
-          return ax - bx;
-        })
-        .slice(0, 2);
-
-      const sortedFaces = [...rawFaces]
-        .filter((lm) => lm && lm[33] && lm[263])
-        .sort((a, b) => {
-          const ax = toScreenX((a[33].x + a[263].x) / 2);
-          const bx = toScreenX((b[33].x + b[263].x) / 2);
-          return ax - bx;
-        })
-        .slice(0, 2);
-
-      const maxDetected = Math.max(sortedPoses.length, sortedFaces.length);
-      let activeCount = 0;
-
-      for (let idx = 0; idx < 2; idx++) {
-        const slot = tState.persons[idx];
-        const poseLm = sortedPoses[idx] || null;
-        const faceLm = sortedFaces[idx] || null;
-
-        if (poseLm || faceLm) {
-          if (!slot.active) {
-            slot.active = true;
-            slot.scanStartTime = now;
-            slot.rouletteStartTime = now;
-            slot.roleIndex = (idx + Math.floor(Math.random() * 4)) % 4;
-          }
-          slot.lostFrames = 0;
-          activeCount++;
-
-          if (poseLm) {
-            const lShoulder = poseLm[11];
-            const rShoulder = poseLm[12];
-            const lHip = poseLm[23] || { x: lShoulder.x, y: lShoulder.y + 0.34 };
-            const rHip = poseLm[24] || { x: rShoulder.x, y: rShoulder.y + 0.34 };
-
-            const sx1 = toScreenX(lShoulder.x);
-            const sy1 = toScreenY(lShoulder.y);
-            const sx2 = toScreenX(rShoulder.x);
-            const sy2 = toScreenY(rShoulder.y);
-            const hx1 = toScreenX(lHip.x);
-            const hy1 = toScreenY(lHip.y);
-            const hx2 = toScreenX(rHip.x);
-            const hy2 = toScreenY(rHip.y);
-
-            const targetCenterX = (sx1 + sx2) / 2;
-            const targetCenterY = (sy1 + sy2) / 2;
-            const targetHipX = (hx1 + hx2) / 2;
-            const targetHipY = (hy1 + hy2) / 2;
-            const targetShoulderWidth = Math.hypot(sx1 - sx2, sy1 - sy2);
-            const targetTorsoHeight = Math.hypot(
-              targetHipX - targetCenterX,
-              targetHipY - targetCenterY
-            );
-
-            const dx = sx1 - sx2;
-            const dy = sy1 - sy2;
-            let targetAngle = Math.atan2(dy, dx);
-            if (dx < 0) targetAngle += Math.PI;
-            targetAngle = clamp(targetAngle, -0.55, 0.55);
-
-            const sf = 0.25;
-            slot.shoulderCenterX = lerp(slot.shoulderCenterX, targetCenterX, sf);
-            slot.shoulderCenterY = lerp(slot.shoulderCenterY, targetCenterY, sf);
-            slot.hipCenterX = lerp(slot.hipCenterX, targetHipX, sf);
-            slot.hipCenterY = lerp(slot.hipCenterY, targetHipY, sf);
-            slot.shoulderWidth = lerp(slot.shoulderWidth, targetShoulderWidth, sf);
-            slot.torsoHeight = lerp(slot.torsoHeight, targetTorsoHeight, sf);
-            slot.shoulderAngle = lerpAngle(slot.shoulderAngle, targetAngle, sf);
-          }
-
-          if (faceLm) {
-            const leftEye = faceLm[33];
-            const rightEye = faceLm[263];
-            const noseTip = faceLm[1] || {
-              x: (leftEye.x + rightEye.x) / 2,
-              y: (leftEye.y + rightEye.y) / 2,
-            };
-
-            const ex1 = toScreenX(leftEye.x);
-            const ey1 = toScreenY(leftEye.y);
-            const ex2 = toScreenX(rightEye.x);
-            const ey2 = toScreenY(rightEye.y);
-            const nx = toScreenX(noseTip.x);
-            const ny = toScreenY(noseTip.y);
-
-            const targetEyeCenterX = (ex1 + ex2) / 2;
-            const targetEyeCenterY = (ey1 + ey2) / 2;
-            const targetEyeDist = Math.hypot(ex1 - ex2, ey1 - ey2);
-
-            const fdx = ex1 - ex2;
-            const fdy = ey1 - ey2;
-            let targetRoll = Math.atan2(fdy, fdx);
-            if (fdx < 0) targetRoll += Math.PI;
-            targetRoll = clamp(targetRoll, -0.65, 0.65);
-
-            const targetYaw = clamp((nx - targetEyeCenterX) / (targetEyeDist * 0.7), -0.8, 0.8);
-            const targetPitch = clamp(
-              (ny - targetEyeCenterY) / (targetEyeDist * 0.9) - 0.35,
-              -0.5,
-              0.5
-            );
-
-            slot.hasFace = true;
-            slot.faceLostFrames = 0;
-            const ff = 0.32;
-            slot.eyeCenterX = lerp(slot.eyeCenterX, targetEyeCenterX, ff);
-            slot.eyeCenterY = lerp(slot.eyeCenterY, targetEyeCenterY, ff);
-            slot.eyeDistance = lerp(slot.eyeDistance, targetEyeDist, ff);
-            slot.headRoll = lerpAngle(slot.headRoll, targetRoll, ff);
-            slot.headYaw = lerp(slot.headYaw, targetYaw, ff);
-            slot.headPitch = lerp(slot.headPitch, targetPitch, ff);
-
-            if (!poseLm) {
-              slot.shoulderCenterX = lerp(slot.shoulderCenterX, slot.eyeCenterX, 0.22);
-              slot.shoulderCenterY = lerp(
-                slot.shoulderCenterY,
-                slot.eyeCenterY + slot.eyeDistance * 2.25,
-                0.22
-              );
-              slot.shoulderWidth = lerp(slot.shoulderWidth, slot.eyeDistance * 3.1, 0.22);
-              slot.torsoHeight = lerp(slot.torsoHeight, slot.eyeDistance * 4.2, 0.22);
-              slot.shoulderAngle = lerpAngle(slot.shoulderAngle, slot.headRoll * 0.5, 0.22);
-            }
-          } else {
-            slot.faceLostFrames++;
-            if (slot.faceLostFrames > 18) slot.hasFace = false;
-          }
-        } else {
-          slot.lostFrames++;
-          if (slot.lostFrames > 22) {
-            slot.active = false;
-            slot.hasFace = false;
-          } else if (slot.active) {
-            activeCount++;
-          }
-        }
-      }
-
-      if (frameCounter % 10 === 0) {
-        setDetectedCount(activeCount);
-      }
-
-      // Update reactive proximity from largest detected shoulder width
-      if (activeCount > 0) {
-        const maxSW = Math.max(
-          ...tState.persons.filter((p) => p.active).map((p) => p.shoulderWidth)
+          tState.trackedPersons,
+          toScreenX,
+          toScreenY,
+          W,
+          now
         );
+        stepTrackedHandsFade(tState.trackedHands, now);
+      } else {
+        ctx.fillStyle = '#0A0A0A';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      const persons = tState.trackedPersons;
+
+      if (persons.length > 0) {
+        const maxSW = Math.max(...persons.map((p) => p.shoulderWidth));
         const rawProx = clamp((maxSW / W - 0.13) / 0.28, 0.15, 1.0);
         tState.proximity = lerp(tState.proximity, rawProx, 0.1);
-        if (frameCounter % 10 === 0) {
-          setProximityLevel(Number(tState.proximity.toFixed(2)));
-        }
       }
 
-      // Helper to get effective career mode for person index (0 or 1)
-      const getCareerForPerson = (idx) => {
-        if (idx === 0) return primaryMode;
-        if (p2CareerSetting === 'SAME') return primaryMode;
-        return p2CareerSetting;
-      };
+      // === 3. RENDERIZAR FILTROS POR CADA PERSONA DETECTADA (hasta MAX_PERSONS) ===
+      const shirtImg =
+        activeCarreraKey === 'sistemas' ? assetsRef.current.shirtSis : assetsRef.current.shirtDer;
+      const vrImg = assetsRef.current.vrHeadset;
 
-      // 4. Render Per-Person Virtual Try-On Poleras, Walking Pixel Dino, VR Headset & Role Roulette HUD
-      tState.persons.forEach((person, idx) => {
-        if (!person.active) return;
-        const personMode = getCareerForPerson(idx);
+      for (let idx = 0; idx < persons.length; idx++) {
+        const person = persons[idx];
 
-        // 4A. Virtual Try-On Polera (SIS or DER)
-        if (personMode !== 'VR_ONLY') {
-          const shirtImg =
-            personMode === 'SIS' ? assetsRef.current.shirtSis : assetsRef.current.shirtDer;
-          if (shirtImg) {
-            ctx.save();
-            ctx.translate(person.shoulderCenterX, person.shoulderCenterY);
-            ctx.rotate(person.shoulderAngle);
+        // 3A. Polera anclada a hombros (manteniendo proporción original)
+        if (person.hasPose && shirtImg) {
+          ctx.save();
+          ctx.translate(person.shoulderCenterX, person.shoulderCenterY);
+          ctx.rotate(person.shoulderAngle);
 
-            const shirtW = person.shoulderWidth * 2.02;
-            const naturalRatio =
-              (shirtImg.naturalHeight || 800) / (shirtImg.naturalWidth || 800);
-            const shirtH = Math.max(shirtW * naturalRatio, person.torsoHeight * 1.48);
-            const collarOffsetY = -shirtH * 0.165;
+          const shirtW = person.shoulderWidth * AR_CONFIG.SHIRT_WIDTH_FACTOR;
+          const naturalRatio = (shirtImg.naturalHeight || 800) / (shirtImg.naturalWidth || 800);
+          const shirtH = shirtW * naturalRatio;
+          const collarOffsetY = -shirtH * AR_CONFIG.SHIRT_COLLAR_OFFSET_Y;
 
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-            ctx.shadowBlur = 18;
-            ctx.drawImage(shirtImg, -shirtW / 2, collarOffsetY, shirtW, shirtH);
-            ctx.restore();
-          }
+          ctx.drawImage(shirtImg, -shirtW / 2, collarOffsetY, shirtW, shirtH);
+          ctx.restore();
         }
 
-        // 4B. Pixelated Companion Dino walking on Left Shoulder when wearing POLERA-SIS
-        if (personMode === 'SIS') {
-          drawWalkingShoulderDino(
-            ctx,
-            person.shoulderCenterX,
-            person.shoulderCenterY,
-            person.shoulderWidth,
-            person.shoulderAngle,
-            now + idx * 900
-          );
-        }
-
-        // 4C. Futuristic VR Headset on Face
-        if (showVr && (person.hasFace || person.active)) {
-          const vrCanvas = assetsRef.current.vrHeadset;
-          if (vrCanvas) {
-            const vx = person.hasFace ? person.eyeCenterX : person.shoulderCenterX;
-            const vy = person.hasFace
-              ? person.eyeCenterY
-              : person.shoulderCenterY - person.shoulderWidth * 0.72;
-            const eDist = person.hasFace ? person.eyeDistance : person.shoulderWidth * 0.32;
-
-            ctx.save();
-            ctx.translate(
-              vx + person.headYaw * eDist * 0.22,
-              vy + person.headPitch * eDist * 0.18
+        // 3B. Elementos exclusivos de la carrera seleccionada (nunca mezclados)
+        if (person.hasPose) {
+          if (activeCarreraKey === 'sistemas') {
+            drawWalkingShoulderDino(
+              ctx,
+              person.shoulderCenterX,
+              person.shoulderCenterY,
+              person.shoulderWidth,
+              person.shoulderAngle,
+              now + person.id * 700
             );
-            ctx.rotate(person.headRoll);
-
-            const vrW = eDist * 3.05;
-            const vrH = vrW;
-            const yawScaleX = 1 - Math.abs(person.headYaw) * 0.12;
-            ctx.scale(yawScaleX, 1);
-
-            ctx.shadowColor = 'rgba(56, 189, 248, 0.7)';
-            ctx.shadowBlur = 22;
-            ctx.drawImage(vrCanvas, -vrW / 2, -vrH * 0.56, vrW, vrH);
-            ctx.restore();
+          } else {
+            drawShoulderScalesEmblem(
+              ctx,
+              person.shoulderCenterX,
+              person.shoulderCenterY,
+              person.shoulderWidth,
+              person.shoulderAngle,
+              now + person.id * 700
+            );
           }
         }
 
-        // 4D. Cyberpunk Biometric Silhouette Scanner & Holographic Role Roulette HUD Card
+        // 3C. Lentes VR (FaceLandmarker de cerca + respaldo Pose de lejos; siempre visibles con la polera)
+        if (showVr && person.hasVr && vrImg) {
+          ctx.save();
+          ctx.translate(person.vrCenterX, person.vrCenterY);
+          ctx.rotate(person.vrAngle);
+
+          const vrW = person.vrWidth;
+          const vrRatio = (vrImg.naturalHeight || 800) / (vrImg.naturalWidth || 800);
+          const vrH = vrW * vrRatio;
+
+          ctx.drawImage(vrImg, -vrW / 2, -vrH * AR_CONFIG.VR_CENTER_Y_RATIO, vrW, vrH);
+          ctx.restore();
+        }
+
+        // 3D. HUD Biométrico & Ruleta de Rol Profesional (solo si accesorio HUD activo)
         if (showHud) {
           const elapsedScan = now - person.scanStartTime;
-          const isInitialScan = elapsedScan < 1550;
-          const scanProgress = isInitialScan
-            ? (elapsedScan % 1550) / 1550
-            : (now * 0.00035) % 1;
+          const isInitialScan = elapsedScan < 1400;
 
-          const boxLeft = person.shoulderCenterX - person.shoulderWidth * 0.92;
-          const boxRight = person.shoulderCenterX + person.shoulderWidth * 0.92;
+          const boxLeft = person.shoulderCenterX - person.shoulderWidth * 0.9;
+          const boxRight = person.shoulderCenterX + person.shoulderWidth * 0.9;
           const boxTop =
-            (person.hasFace
-              ? person.eyeCenterY
+            (person.hasVr
+              ? person.vrCenterY
               : person.shoulderCenterY - person.shoulderWidth * 0.7) -
-            person.shoulderWidth * 0.44;
-          const boxBottom = person.shoulderCenterY + person.torsoHeight * 1.15;
+            person.shoulderWidth * 0.42;
+          const boxBottom = person.shoulderCenterY + person.torsoHeight * 1.1;
           const boxW = boxRight - boxLeft;
           const boxH = boxBottom - boxTop;
 
           ctx.save();
-          const cornerLen = Math.min(34, boxW * 0.15);
-          ctx.strokeStyle = isInitialScan ? '#FF6B00' : 'rgba(255, 107, 0, 0.5)';
-          ctx.lineWidth = isInitialScan ? 3 : 1.8;
-          ctx.shadowColor = '#FF6B00';
-          ctx.shadowBlur = isInitialScan ? 16 : 6;
+          const cornerLen = Math.min(30, boxW * 0.15);
+          ctx.strokeStyle = isInitialScan ? '#FF6B00' : 'rgba(255, 107, 0, 0.55)';
+          ctx.lineWidth = isInitialScan ? 2.6 : 1.6;
 
           ctx.beginPath();
           ctx.moveTo(boxLeft, boxTop + cornerLen);
@@ -1088,232 +931,218 @@ export default function App() {
           ctx.stroke();
 
           if (isInitialScan) {
+            const scanProgress = (elapsedScan % 1400) / 1400;
             const scanY = boxTop + scanProgress * boxH;
-            const scanGrad = ctx.createLinearGradient(boxLeft, scanY - 25, boxLeft, scanY + 6);
-            scanGrad.addColorStop(0, 'rgba(255, 107, 0, 0)');
-            scanGrad.addColorStop(0.85, 'rgba(255, 107, 0, 0.35)');
-            scanGrad.addColorStop(1, 'rgba(255, 255, 255, 0.95)');
-            ctx.fillStyle = scanGrad;
-            ctx.fillRect(boxLeft, scanY - 25, boxW, 31);
+            ctx.fillStyle = 'rgba(255, 107, 0, 0.32)';
+            ctx.fillRect(boxLeft, scanY - 4, boxW, 6);
           }
           ctx.restore();
 
-          // Holographic Role Roulette Floating Terminal Card next to shoulder
-          const modeObj = AR_MODES.find((m) => m.id === personMode) || AR_MODES[0];
-          const rolesList = FUTURE_ROLES[personMode] || FUTURE_ROLES.SIS;
+          const rolesList = activeCareer.roles;
           const elapsedRoulette = now - person.rouletteStartTime;
-          const isSpinningRoulette = elapsedRoulette < 1500;
+          const isSpinningRoulette = elapsedRoulette < 1400;
           const currentRoleText = isSpinningRoulette
             ? rolesList[Math.floor(elapsedRoulette / 95) % rolesList.length]
             : rolesList[person.roleIndex % rolesList.length];
 
-          const cardW = Math.min(350, Math.max(265, W * 0.25));
-          const cardH = 114;
+          const cardW = Math.min(310, Math.max(220, W * 0.21));
+          const cardH = 104;
           const rawCardX =
-            idx === 0 && activeCount > 1
+            idx === 0 && persons.length > 1
               ? person.shoulderCenterX - person.shoulderWidth * 0.78 - cardW
-              : person.shoulderCenterX + person.shoulderWidth * 0.75;
-          const cardX = clamp(rawCardX, 18, W - cardW - 18);
+              : person.shoulderCenterX + person.shoulderWidth * 0.72;
+          const cardX = clamp(rawCardX, 16, W - cardW - 16);
           const cardY = clamp(
-            person.shoulderCenterY - person.shoulderWidth * 0.58,
-            88,
-            H - cardH - 140
+            person.shoulderCenterY - person.shoulderWidth * 0.55,
+            84,
+            H - cardH - 135
           );
 
           ctx.save();
-          ctx.fillStyle = 'rgba(10, 10, 10, 0.88)';
+          ctx.fillStyle = 'rgba(10, 10, 10, 0.86)';
           ctx.strokeStyle = '#FF6B00';
-          ctx.lineWidth = 1.8;
-          ctx.shadowColor = 'rgba(255, 107, 0, 0.5)';
-          ctx.shadowBlur = 16;
+          ctx.lineWidth = 1.6;
           ctx.beginPath();
-          ctx.roundRect(cardX, cardY, cardW, cardH, 12);
+          ctx.roundRect(cardX, cardY, cardW, cardH, 10);
           ctx.fill();
           ctx.stroke();
 
           ctx.fillStyle = '#FF6B00';
           ctx.beginPath();
-          ctx.roundRect(cardX, cardY, cardW, 24, [12, 12, 0, 0]);
+          ctx.roundRect(cardX, cardY, cardW, 22, [10, 10, 0, 0]);
           ctx.fill();
 
           ctx.fillStyle = '#0A0A0A';
-          ctx.font = '800 10px "Orbitron", sans-serif';
+          ctx.font = '800 9.5px "Orbitron", sans-serif';
           ctx.textAlign = 'left';
           ctx.fillText(
-            `${modeObj.badge} ${activeCount > 1 ? `// ESTUDIANTE #${idx + 1}` : ''}`,
-            cardX + 12,
-            cardY + 16
+            `${activeCareer.badge}${persons.length > 1 ? ` // P#${idx + 1}` : ''}`,
+            cardX + 10,
+            cardY + 14.5
           );
 
           ctx.fillStyle = '#FFFFFF';
-          ctx.font = '700 12px "Space Grotesk", sans-serif';
-          ctx.fillText(modeObj.profileTitle, cardX + 12, cardY + 46);
+          ctx.font = '700 11.5px "Space Grotesk", sans-serif';
+          ctx.fillText(activeCareer.profileTitle, cardX + 10, cardY + 42);
 
-          // Slot / Terminal Role Box
           ctx.fillStyle = isSpinningRoulette
-            ? 'rgba(255, 107, 0, 0.28)'
+            ? 'rgba(255, 107, 0, 0.25)'
             : 'rgba(255, 107, 0, 0.14)';
-          ctx.strokeStyle = isSpinningRoulette ? '#FFFFFF' : 'rgba(255, 107, 0, 0.65)';
+          ctx.strokeStyle = isSpinningRoulette ? '#FFFFFF' : 'rgba(255, 107, 0, 0.6)';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
-          ctx.roundRect(cardX + 10, cardY + 55, cardW - 20, 32, 6);
+          ctx.roundRect(cardX + 10, cardY + 50, cardW - 20, 28, 6);
           ctx.fill();
           ctx.stroke();
 
           ctx.fillStyle = isSpinningRoulette ? '#FFFFFF' : '#FF6B00';
-          ctx.font = '800 11.5px "Orbitron", sans-serif';
+          ctx.font = '800 10.5px "Orbitron", sans-serif';
           ctx.fillText(
             isSpinningRoulette ? `🎰 ${currentRoleText.toUpperCase()}` : `★ ${currentRoleText}`,
-            cardX + 18,
-            cardY + 75
+            cardX + 16,
+            cardY + 68
           );
 
           ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-          ctx.font = '600 10px "Orbitron", monospace';
-          ctx.fillText(
-            isSpinningRoulette
-              ? 'ESCANEANDO PERFIL DE NUEVA MALLA...'
-              : 'ROL DEL FUTURO ASIGNADO • NUEVA MALLA',
-            cardX + 12,
-            cardY + 103
-          );
+          ctx.font = '600 9px "Orbitron", monospace';
+          ctx.fillText('ROL DEL FUTURO • NUEVA MALLA', cardX + 10, cardY + 94);
           ctx.restore();
         }
-      });
+      }
 
-      // 5. MULTI-PERSON SYNERGY BEAM ("SINERGIA UNIFRANZ • NUEVA MALLA 2026")
-      if (tState.persons[0].active && tState.persons[1].active) {
-        const p1 = tState.persons[0];
-        const p2 = tState.persons[1];
-        const distBetween = Math.hypot(
-          p2.shoulderCenterX - p1.shoulderCenterX,
-          p2.shoulderCenterY - p1.shoulderCenterY
-        );
-        if (distBetween < W * 0.78) {
-          drawSynergyConnectionBeam(
-            ctx,
-            p1.shoulderCenterX,
-            p1.shoulderCenterY + p1.torsoHeight * 0.15,
-            p2.shoulderCenterX,
-            p2.shoulderCenterY + p2.torsoHeight * 0.15,
-            now
+      // === 4. HAZ DE SINERGIA MULTI-PERSONA ===
+      if (persons.length >= 2) {
+        for (let i = 0; i < persons.length - 1; i++) {
+          const p1 = persons[i];
+          const p2 = persons[i + 1];
+          const distBetween = Math.hypot(
+            p2.shoulderCenterX - p1.shoulderCenterX,
+            p2.shoulderCenterY - p1.shoulderCenterY
           );
+          if (distBetween < W * 0.72) {
+            drawSynergyConnectionBeam(
+              ctx,
+              p1.shoulderCenterX,
+              p1.shoulderCenterY + p1.torsoHeight * 0.15,
+              p2.shoulderCenterX,
+              p2.shoulderCenterY + p2.torsoHeight * 0.15,
+              now
+            );
+          }
         }
       }
 
-      // 6. INTERACTIVE HAND POWERS (MediaPipe HandLandmarker: landmarks 0, 5, 9, 13, 17)
-      const personhandsMap = [[], []];
+      // === 5. ELEMENTOS EN MANOS SUAVIZADOS (ESTRICTAMENTE SEPARADOS POR CARRERA) ===
+      // Nota: NUNCA se cambia carrera ni accesorios desde gestos de manos.
+      const trackedHands = tState.trackedHands;
+      const handsByPersonId = new Map();
 
-      if (handResults?.landmarks?.length > 0) {
-        handResults.landmarks.forEach((handLm) => {
-          const gesture = analyzeHandGesture(handLm);
-          const palmInfo = computePalmCenterAndTilt(handLm, toScreenX, toScreenY);
+      for (let i = 0; i < trackedHands.length; i++) {
+        const hand = trackedHands[i];
+        if (hand.alpha <= 0.02) continue;
 
-          // Assign hand to nearest active person
-          let ownerIdx = 0;
-          if (tState.persons[0].active && tState.persons[1].active) {
-            const d0 = Math.hypot(
-              palmInfo.x - tState.persons[0].shoulderCenterX,
-              palmInfo.y - tState.persons[0].shoulderCenterY
-            );
-            const d1 = Math.hypot(
-              palmInfo.x - tState.persons[1].shoulderCenterX,
-              palmInfo.y - tState.persons[1].shoulderCenterY
-            );
-            ownerIdx = d1 < d0 ? 1 : 0;
-          } else if (tState.persons[1].active) {
-            ownerIdx = 1;
+        if (!handsByPersonId.has(hand.ownerPersonId)) {
+          handsByPersonId.set(hand.ownerPersonId, []);
+        }
+        handsByPersonId.get(hand.ownerPersonId).push(hand);
+
+        // Puntos cibernéticos sutiles en dedos (solo si HUD activo y mano visible)
+        if (showHud && !hand.isMissing && hand.rawLandmarks) {
+          ctx.save();
+          ctx.globalAlpha = hand.alpha;
+          ctx.fillStyle = '#FF6B00';
+          const keyPts = [0, 5, 9, 13, 17, 4, 8, 12, 16, 20];
+          for (let k = 0; k < keyPts.length; k++) {
+            const pt = hand.rawLandmarks[keyPts[k]];
+            ctx.beginPath();
+            ctx.arc(toScreenX(pt.x), toScreenY(pt.y), 3, 0, Math.PI * 2);
+            ctx.fill();
           }
+          ctx.restore();
+        }
 
-          const ownerPerson = tState.persons[ownerIdx];
-          const isHandRaised =
-            handLm[0].y < 0.85 ||
-            (ownerPerson.active &&
-              palmInfo.y < ownerPerson.shoulderCenterY + ownerPerson.torsoHeight * 0.75);
-
-          if (isHandRaised) {
-            personhandsMap[ownerIdx].push({
-              ...palmInfo,
-              gesture,
-              rawWristY: handLm[0].y,
-            });
+        // Gesto Amor y Paz para capturar foto (no modifica carrera ni accesorios)
+        if (!sim && !hand.isMissing && hand.gesture === 'PEACE') {
+          tState.peaceOrSmileHoldFrames++;
+          if (
+            tState.peaceOrSmileHoldFrames >= AR_CONFIG.PEACE_OR_SMILE_HOLD_FRAMES &&
+            now - tState.lastPhotoTriggerTime > AR_CONFIG.PHOTO_TRIGGER_COOLDOWN_MS &&
+            !stateRef.current.countdownActive
+          ) {
+            tState.lastPhotoTriggerTime = now;
+            tState.peaceOrSmileHoldFrames = 0;
+            startPhotoCountdown('✌️ GESTO AMOR Y PAZ: FOTO EN 3... 2... 1...');
           }
-
-          // Subtle glowing cyber joints on fingers
-          if (showHud) {
-            ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
-            ctx.fillStyle = '#FF6B00';
-            [0, 5, 9, 13, 17, 4, 8, 12, 16, 20].forEach((ptIdx) => {
-              const hx = toScreenX(handLm[ptIdx].x);
-              const hy = toScreenY(handLm[ptIdx].y);
-              ctx.beginPath();
-              ctx.arc(hx, hy, 3.2, 0, Math.PI * 2);
-              ctx.fill();
-            });
-            ctx.restore();
-          }
-
-          // Air Gesture Controls (Open Hand 5 fingers -> Switch Polera; Peace ✌️ -> Photo Countdown)
-          if (!sim && gesture === 'OPEN_PALM') {
-            tState.openHandHoldFrames++;
-            if (
-              tState.openHandHoldFrames >= 12 &&
-              now - tState.lastModeSwitchTime > 2400
-            ) {
-              tState.lastModeSwitchTime = now;
-              tState.openHandHoldFrames = 0;
-              cycleArMode({ x: palmInfo.x / W, y: palmInfo.y / H }, true);
-            }
-          } else if (!sim && gesture === 'PEACE') {
-            tState.peaceOrSmileHoldFrames++;
-            if (
-              tState.peaceOrSmileHoldFrames >= 9 &&
-              now - tState.lastPhotoTriggerTime > 5500 &&
-              !stateRef.current.countdownActive
-            ) {
-              tState.lastPhotoTriggerTime = now;
-              tState.peaceOrSmileHoldFrames = 0;
-              startPhotoCountdown('✌️ GESTO AMOR Y PAZ: FOTO EN 3... 2... 1...');
-            }
-          }
-        });
+        }
       }
 
-      // Render career-specific hand powers for each person
-      personhandsMap.forEach((hands, pIdx) => {
-        if (hands.length === 0) return;
-        const person = tState.persons[pIdx];
-        const careerMode = getCareerForPerson(pIdx);
+      // Dibujar elementos propios de cada carrera sobre las manos suavizadas de cada persona
+      handsByPersonId.forEach((hands, ownerId) => {
+        const person = persons.find((p) => p.id === ownerId) || persons[0];
+        if (!person) return;
 
-        if (careerMode === 'SIS' || careerMode === 'VR_ONLY') {
-          // Check if both hands are brought together near chest -> Digital Fusion Energy Core!
+        if (activeCarreraKey === 'derecho') {
+          // SOLO elementos de Derecho: Escudo LegalTech + Balanza Holográfica suavizada
+          if (hands.length >= 2) {
+            const shieldX = (hands[0].x + hands[1].x) / 2;
+            const shieldY = (hands[0].y + hands[1].y) / 2;
+            const shieldAlpha = Math.min(hands[0].alpha, hands[1].alpha);
+            drawLegalTechShield(
+              ctx,
+              shieldX,
+              shieldY,
+              Math.max(105, person.shoulderWidth * AR_CONFIG.SHIELD_RADIUS_FACTOR),
+              now,
+              shieldAlpha
+            );
+          }
+
+          hands.forEach((h) => {
+            drawHolographicScales(
+              ctx,
+              h.x,
+              h.y - 64,
+              Math.max(46, person.shoulderWidth * AR_CONFIG.SCALES_SIZE_FACTOR),
+              now,
+              h.tiltAngle,
+              h.alpha
+            );
+          });
+        } else if (activeCarreraKey === 'sistemas') {
+          // SOLO elementos de Sistemas: Núcleo Fusión Digital + Esfera Red Neuronal
           let isFused = false;
           if (hands.length >= 2) {
             const h1 = hands[0];
             const h2 = hands[1];
             const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
-            const fuseThreshold = Math.max(150, person.shoulderWidth * 0.85);
+            const fuseThreshold = Math.max(140, person.shoulderWidth * 0.85);
 
             if (handDist < fuseThreshold) {
               isFused = true;
               const coreX = (h1.x + h2.x) / 2;
               const coreY = (h1.y + h2.y) / 2;
-              drawDigitalFusionCore(ctx, coreX, coreY, Math.max(68, person.shoulderWidth * 0.36), now);
+              const coreAlpha = Math.min(h1.alpha, h2.alpha);
+              drawDigitalFusionCore(
+                ctx,
+                coreX,
+                coreY,
+                Math.max(60, person.shoulderWidth * AR_CONFIG.FUSION_CORE_RADIUS_FACTOR),
+                now,
+                coreAlpha
+              );
 
-              // Shoot burst code particles ('0', '1', '{ }', 'AI') across the screen
               const tokens = ['0', '1', '{ }', 'AI', '</>', '01'];
-              for (let b = 0; b < 3; b++) {
-                if (tState.burstParticles.length < 110) {
+              for (let b = 0; b < 2; b++) {
+                if (tState.burstParticles.length < 60) {
                   const angle = Math.random() * Math.PI * 2;
-                  const speed = 4 + Math.random() * 9;
+                  const speed = 4 + Math.random() * 7;
                   tState.burstParticles.push({
                     x: coreX,
                     y: coreY,
                     vx: Math.cos(angle) * speed,
                     vy: Math.sin(angle) * speed,
                     text: tokens[Math.floor(Math.random() * tokens.length)],
-                    size: 13 + Math.random() * 11,
+                    size: 12 + Math.random() * 9,
                     alpha: 1,
                     color: Math.random() > 0.35 ? '#FF6B00' : '#FFFFFF',
                   });
@@ -1322,57 +1151,32 @@ export default function App() {
             }
           }
 
-          // Otherwise render rotating Neural Network / Binary Holographic Spheres on each raised palm
           if (!isFused) {
             hands.forEach((h, hIdx) => {
               drawNeuralBinarySphere(
                 ctx,
                 h.x,
                 h.y - 24,
-                Math.max(44, person.shoulderWidth * 0.24),
-                now + hIdx * 500
+                Math.max(40, person.shoulderWidth * AR_CONFIG.NEURAL_SPHERE_RADIUS_FACTOR),
+                now + hIdx * 500,
+                h.alpha
               );
             });
           }
-        } else if (careerMode === 'DER') {
-          // If both hands are raised -> Deploy Hexagonal LegalTech Shield in front of torso
-          if (hands.length >= 2) {
-            const shieldX = (hands[0].x + hands[1].x) / 2;
-            const shieldY = (hands[0].y + hands[1].y) / 2;
-            drawLegalTechShield(
-              ctx,
-              shieldX,
-              shieldY,
-              Math.max(115, person.shoulderWidth * 0.62),
-              now
-            );
-          }
-
-          // Project Holographic Scales of Justice above raised palm, tilting dynamically with hand inclination
-          hands.forEach((h) => {
-            drawHolographicScales(
-              ctx,
-              h.x,
-              h.y - 68,
-              Math.max(50, person.shoulderWidth * 0.26),
-              now,
-              h.tiltAngle
-            );
-          });
         }
       });
 
-      // 7. Render & Update Fusion Burst Code Particles ('0', '1', '{ }', 'AI')
-      if (tState.burstParticles.length > 0) {
+      // === 6. PARTÍCULAS DE CÓDIGO (SOLO EN SISTEMAS) ===
+      if (activeCarreraKey === 'sistemas' && tState.burstParticles.length > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         for (let i = tState.burstParticles.length - 1; i >= 0; i--) {
           const bp = tState.burstParticles[i];
           bp.x += bp.vx;
           bp.y += bp.vy;
-          bp.alpha -= 0.018;
+          bp.alpha -= 0.022;
 
-          if (bp.alpha <= 0.02 || bp.x < -50 || bp.x > W + 50 || bp.y < -50 || bp.y > H + 50) {
+          if (bp.alpha <= 0.03 || bp.x < -50 || bp.x > W + 50 || bp.y < -50 || bp.y > H + 50) {
             tState.burstParticles.splice(i, 1);
             continue;
           }
@@ -1380,17 +1184,17 @@ export default function App() {
           ctx.font = `900 ${Math.round(bp.size)}px "Orbitron", monospace`;
           ctx.fillStyle = bp.color;
           ctx.globalAlpha = bp.alpha;
-          ctx.shadowColor = '#FF6B00';
-          ctx.shadowBlur = 12;
           ctx.fillText(bp.text, bp.x, bp.y);
         }
         ctx.restore();
+      } else if (activeCarreraKey !== 'sistemas' && tState.burstParticles.length > 0) {
+        tState.burstParticles.length = 0;
       }
 
-      // 8. Ambient Proximity-Reactive Floating Particles
+      // === 7. PARTÍCULAS AMBIENTALES LIGERAS (SOLO SI HUD ACTIVO) ===
       if (showHud) {
         const prox = tState.proximity;
-        const speedMultiplier = 0.7 + prox * 2.2;
+        const speedMultiplier = 0.7 + prox * 1.8;
         tState.particles.forEach((p) => {
           p.y += p.vy * speedMultiplier;
           p.x += p.vx * speedMultiplier;
@@ -1404,93 +1208,86 @@ export default function App() {
           const px = p.x * W;
           const py = p.y * H;
 
-          if (primaryMode === 'SIS') {
+          if (activeCarreraKey === 'sistemas') {
             if (p.type === 'DINO') {
               drawPixelDino(
                 ctx,
                 px,
                 py,
-                2.2 + prox * 1.1,
+                2.2 + prox * 0.9,
                 p.color,
-                clamp(p.alpha * (0.5 + prox * 0.6), 0.2, 0.95),
+                clamp(p.alpha * (0.5 + prox * 0.5), 0.2, 0.9),
                 Math.floor(now / 220) % 2
               );
             } else {
               ctx.save();
-              ctx.font = `700 ${Math.round(p.size + prox * 5)}px "Orbitron", monospace`;
+              ctx.font = `700 ${Math.round(p.size + prox * 4)}px "Orbitron", monospace`;
               ctx.fillStyle = p.color;
-              ctx.globalAlpha = clamp(p.alpha * (0.45 + prox * 0.55), 0.15, 0.9);
-              ctx.shadowColor = '#FF6B00';
-              ctx.shadowBlur = 8 * prox;
+              ctx.globalAlpha = clamp(p.alpha * (0.45 + prox * 0.5), 0.15, 0.85);
               ctx.fillText(p.type, px, py);
               ctx.restore();
             }
           } else {
             ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
-            const rad = (p.size * 0.22 + 1.5) * (0.8 + prox * 0.6);
-            const g = ctx.createRadialGradient(px, py, 0.5, px, py, rad * 2.5);
-            g.addColorStop(0, '#FFFFFF');
-            g.addColorStop(0.45, '#FF6B00');
-            g.addColorStop(1, 'rgba(255, 107, 0, 0)');
-            ctx.fillStyle = g;
-            ctx.globalAlpha = clamp(p.alpha * (0.5 + prox * 0.5), 0.2, 0.95);
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = clamp(p.alpha * (0.4 + prox * 0.45), 0.15, 0.8);
             ctx.beginPath();
-            ctx.arc(px, py, rad * 2.5, 0, Math.PI * 2);
+            ctx.arc(px, py, 2.2 + prox * 1.8, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
           }
         });
       }
 
-      // 9. Smile Detection Trigger for Photo Countdown
-      if (!sim && sortedFaces.length > 0 && detectSmileFromFace(sortedFaces[0], faceBlendshapes, 0)) {
-        tState.peaceOrSmileHoldFrames++;
-        if (
-          tState.peaceOrSmileHoldFrames >= 16 &&
-          now - tState.lastPhotoTriggerTime > 6000 &&
-          !stateRef.current.countdownActive
-        ) {
-          tState.lastPhotoTriggerTime = now;
-          tState.peaceOrSmileHoldFrames = 0;
-          startPhotoCountdown('😄 ¡SONRISA UNIFRANZ DETECTADA! CAPTURANDO...');
+      // === 8. DETECCIÓN DE SONRISA PARA FOTO ===
+      if (!sim && persons.length > 0) {
+        const hasSmilingFace = persons.some(
+          (p) => p.hasFace && detectSmileFromFace(p.rawFaceLandmarks, p.faceBlendshapes)
+        );
+        if (hasSmilingFace) {
+          tState.peaceOrSmileHoldFrames++;
+          if (
+            tState.peaceOrSmileHoldFrames >= 14 &&
+            now - tState.lastPhotoTriggerTime > AR_CONFIG.PHOTO_TRIGGER_COOLDOWN_MS &&
+            !stateRef.current.countdownActive
+          ) {
+            tState.lastPhotoTriggerTime = now;
+            tState.peaceOrSmileHoldFrames = 0;
+            startPhotoCountdown('😄 ¡SONRISA UNIFRANZ DETECTADA! CAPTURANDO...');
+          }
         }
       }
 
-      // 10. Render Orange Energy Shockwaves
+      // === 9. ONDAS DE ENERGÍA ===
       for (let i = tState.shockwaves.length - 1; i >= 0; i--) {
         const sw = tState.shockwaves[i];
         sw.radius += 26;
         sw.alpha = Math.max(0, 1 - sw.radius / sw.maxRadius);
 
         ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
         ctx.strokeStyle = `rgba(255, 107, 0, ${sw.alpha})`;
-        ctx.lineWidth = 6 * sw.alpha + 1;
-        ctx.shadowColor = '#FF6B00';
-        ctx.shadowBlur = 25;
+        ctx.lineWidth = 4 * sw.alpha + 1;
         ctx.beginPath();
         ctx.arc(sw.x * W, sw.y * H, sw.radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
 
-        if (sw.alpha <= 0.02) {
+        if (sw.alpha <= 0.03) {
           tState.shockwaves.splice(i, 1);
         }
       }
 
-      // 11. Subtle Dark Edge Vignette
+      // === 10. VIÑETA SUTIL DE BORDE ===
       const vigGrad = ctx.createRadialGradient(
         W * 0.5,
         H * 0.5,
-        Math.min(W, H) * 0.36,
+        Math.min(W, H) * 0.38,
         W * 0.5,
         H * 0.5,
-        Math.max(W, H) * 0.75
+        Math.max(W, H) * 0.78
       );
       vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      vigGrad.addColorStop(0.75, 'rgba(5, 5, 5, 0.3)');
-      vigGrad.addColorStop(1, 'rgba(10, 10, 10, 0.76)');
+      vigGrad.addColorStop(1, 'rgba(10, 10, 10, 0.58)');
       ctx.fillStyle = vigGrad;
       ctx.fillRect(0, 0, W, H);
     };
@@ -1499,10 +1296,9 @@ export default function App() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isReady, cycleArMode, startPhotoCountdown]);
+  }, [isReady, startPhotoCountdown]);
 
-  const activeCareerObj =
-    AR_MODES.find((m) => m.id === selectedCareer) || AR_MODES[0];
+  const activeCareerObj = CAREERS[carrera] || CAREERS.sistemas;
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0A0A0A] select-none">
@@ -1518,231 +1314,193 @@ export default function App() {
         />
       )}
 
-      {/* Main 60 FPS AR Mirror Canvas */}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block z-0" />
 
-      {/* Reactive Proximity Neon Screen Border */}
-      <div
-        className="pointer-events-none fixed inset-0 z-10 transition-all duration-200"
-        style={{
-          boxShadow: `inset 0 0 ${Math.round(25 + proximityLevel * 75)}px rgba(255, 107, 0, ${(
-            0.18 +
-            proximityLevel * 0.52
-          ).toFixed(2)}), inset 0 0 ${Math.round(8 + proximityLevel * 20)}px rgba(255, 85, 0, ${(
-            0.35 +
-            proximityLevel * 0.5
-          ).toFixed(2)})`,
-          border: `${Math.round(2 + proximityLevel * 3)}px solid rgba(255, 107, 0, ${(
-            0.35 +
-            proximityLevel * 0.6
-          ).toFixed(2)})`,
-        }}
-      />
+      <div className="pointer-events-none fixed inset-0 z-10 border-2 border-[#FF6B00]/55" />
 
       {flashActive && (
-        <div className="fixed inset-0 z-40 bg-white animate-ping pointer-events-none" />
+        <div className="fixed inset-0 z-40 bg-white/90 pointer-events-none transition-opacity duration-200" />
       )}
 
-      {/* Top Institutional Header Bar */}
-      <header className="fixed top-0 inset-x-0 z-20 p-4 md:px-7 md:py-4 flex items-center justify-between gap-3 pointer-events-none">
-        <div className="pointer-events-auto glass-panel px-4 py-2.5 rounded-2xl flex items-center gap-3.5 shadow-neon-orange">
-          <UnifranzLogo className="h-9 md:h-10" />
+      {/* Barra Superior Institucional */}
+      <header className="fixed top-0 inset-x-0 z-20 p-3 md:px-6 md:py-4 flex items-center justify-between gap-3 pointer-events-none">
+        <div className="pointer-events-auto glass-panel px-4 py-2 rounded-2xl flex items-center gap-3.5">
+          <UnifranzLogo className="h-8 md:h-10" />
           <div className="hidden sm:flex flex-col border-l border-white/15 pl-3.5">
             <span className="font-display font-bold text-[10px] text-[#FF6B00] tracking-widest uppercase">
               INAUGURACIÓN NUEVA MALLA 2026
             </span>
-            <span className="font-tech text-xs text-white/85 font-semibold">
+            <span className="font-tech text-xs text-white/90 font-semibold">
               {activeCareerObj.fullName}
             </span>
           </div>
         </div>
 
         {gestureBanner && (
-          <div className="hidden xl:flex items-center gap-2.5 px-5 py-2.5 rounded-full glass-panel-bright text-[#FF6B00] font-display font-bold text-xs tracking-wider uppercase animate-bounce shadow-neon-strong">
+          <div className="hidden xl:flex items-center gap-2 px-4 py-2 rounded-full glass-panel-bright text-[#FF6B00] font-display font-bold text-xs tracking-wider uppercase">
             <Sparkles className="w-4 h-4" />
             <span>{gestureBanner}</span>
           </div>
         )}
 
-        {/* Right Actions: Spin Role Roulette + Synergy Controls + FPS */}
         <div className="pointer-events-auto flex items-center gap-2">
           <button
             onClick={spinRoleRoulette}
-            className="glass-panel hover:bg-[#FF6B00] hover:text-black text-white px-3.5 py-2.5 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 transition shadow-neon-orange"
+            className="glass-panel hover:bg-[#FF6B00] hover:text-black text-white px-3.5 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 transition"
             title="Girar Ruleta de Rol Profesional del Futuro"
           >
-            <RefreshCw className="w-3.5 h-3.5 text-[#FF6B00] group-hover:text-black" />
-            <span>🔄 Nuevo Perfil</span>
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Nuevo Perfil</span>
           </button>
 
-          {/* Second Person Career Selector / Simulation Synergy Toggle */}
-          {(detectedCount > 1 || isSimulationMode) && (
+          <button
+            onClick={() => setFondoMetaverso((prev) => !prev)}
+            className={`px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
+              fondoMetaverso
+                ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                : 'glass-panel text-white/75 hover:text-white border-white/15'
+            }`}
+            title="Activar/Desactivar Fondo Metaverso (segmentación)"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Fondo VR</span>
+          </button>
+
+          {isSimulationMode && (
             <button
-              onClick={() => {
-                if (isSimulationMode && !simTwoPersons) {
-                  setSimTwoPersons(true);
-                  triggerEnergyShockwave(0.5, 0.5, '⚡ MODO SINERGIA 2 PERSONAS ACTIVADO');
-                } else {
-                  setSecondPersonCareer((prev) =>
-                    prev === 'SAME' ? 'DER' : prev === 'DER' ? 'SIS' : 'SAME'
-                  );
-                }
-              }}
-              className="glass-panel px-3.5 py-2.5 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 text-[#FF6B00] border border-[#FF6B00]/60 hover:bg-[#FF6B00]/20 transition"
-              title="Configurar Polera del Estudiante #2 en Modo Sinergia"
+              onClick={() => setSimTwoPersons((prev) => !prev)}
+              className={`px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
+                simTwoPersons
+                  ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                  : 'glass-panel text-[#FF6B00] border-[#FF6B00]/60'
+              }`}
+              title="Alternar 1 o 2 personas en simulación"
             >
               <Users className="w-3.5 h-3.5" />
-              <span>
-                {isSimulationMode && !simTwoPersons
-                  ? '+ Simular 2 Personas'
-                  : `P2: ${
-                      secondPersonCareer === 'SAME'
-                        ? 'Misma Polera'
-                        : secondPersonCareer === 'SIS'
-                        ? 'Sistemas'
-                        : 'Derecho'
-                    }`}
-              </span>
+              <span>{simTwoPersons ? '2P Sim' : '1P Sim'}</span>
             </button>
           )}
 
-          <div className="glass-panel px-3.5 py-2.5 rounded-2xl flex items-center gap-2 text-xs font-tech">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                detectedCount > 0
-                  ? 'bg-[#FF6B00] shadow-[0_0_10px_#FF6B00] animate-ping'
-                  : 'bg-white/40'
-              }`}
-            />
-            <span className="font-display font-bold text-[11px] tracking-wider text-white">
-              {detectedCount > 1 ? '2P SINERGIA' : `${fpsCount} FPS`}
+          <div className="glass-panel px-3.5 py-2 rounded-2xl flex items-center gap-2.5 text-xs font-tech">
+            <span className="flex items-center gap-1 text-white/80 font-semibold" title="Personas detectadas">
+              <Users className="w-3.5 h-3.5 text-[#FF6B00]" />
+              <span ref={peopleSpanRef}>0</span>
+            </span>
+            <span className="h-3.5 w-[1px] bg-white/20" />
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#FF6B00]" />
+              <span ref={fpsSpanRef} className="font-display font-bold text-[11px] tracking-wider text-[#FF6B00]">
+                -- FPS
+              </span>
             </span>
           </div>
         </div>
       </header>
 
-      {/* Holographic 3... 2... 1... Countdown Overlay */}
+      {/* Overlay de Cuenta Regresiva */}
       {countdown !== null && (
-        <div className="fixed inset-0 z-30 flex flex-col items-center justify-center pointer-events-none bg-black/35 backdrop-blur-[2px]">
-          <div className="relative flex items-center justify-center w-48 h-48 md:w-64 md:h-64 rounded-full glass-panel-bright border-4 border-[#FF6B00] shadow-neon-strong">
-            <span className="font-display font-black text-7xl md:text-9xl text-white drop-shadow-[0_0_30px_#FF6B00]">
+        <div className="fixed inset-0 z-30 flex flex-col items-center justify-center pointer-events-none bg-black/40">
+          <div className="relative flex items-center justify-center w-44 h-44 md:w-56 md:h-56 rounded-full glass-panel-bright border-4 border-[#FF6B00]">
+            <span className="font-display font-black text-7xl md:text-8xl text-white">
               {countdown}
             </span>
           </div>
-          <p className="mt-5 font-display font-bold text-sm md:text-base tracking-[0.25em] uppercase text-[#FF6B00] bg-black/80 px-5 py-2 rounded-full border border-[#FF6B00]/50">
-            ¡POSA CON TUS PODERES HOLOGRÁFICOS UNIFRANZ!
+          <p className="mt-5 font-display font-bold text-sm md:text-base tracking-[0.22em] uppercase text-[#FF6B00] bg-black/85 px-5 py-2 rounded-full border border-[#FF6B00]/60">
+            ¡POSA CON TUS FILTROS UNIFRANZ!
           </p>
         </div>
       )}
 
-      {/* Bottom Floating Glassmorphism Control Dock */}
-      <footer className="fixed bottom-0 inset-x-0 z-20 p-4 md:p-5 flex flex-col items-center pointer-events-none">
-        <div className="pointer-events-auto max-w-5xl w-full glass-panel rounded-3xl p-3 md:px-6 md:py-3.5 shadow-neon-orange flex flex-col lg:flex-row items-center justify-between gap-3">
-          {/* Left Group: Career Quick Selector */}
-          <div className="flex flex-wrap items-center justify-center gap-2">
+      {/* Panel Inferior: Grupo Carrera | Grupo Accesorios | Captura */}
+      <footer className="fixed bottom-0 inset-x-0 z-20 p-3 md:p-5 flex flex-col items-center pointer-events-none">
+        <div className="pointer-events-auto max-w-6xl w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col lg:flex-row items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-2 bg-black/45 p-1.5 rounded-2xl border border-white/10">
+            <span className="hidden xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-white/50 px-2">
+              Carrera
+            </span>
             <button
-              onClick={() => {
-                setSelectedCareer('SIS');
-                const now = performance.now();
-                trackingRef.current.persons.forEach((p) => {
-                  p.scanStartTime = now;
-                  p.rouletteStartTime = now;
-                });
-                triggerEnergyShockwave(
-                  0.5,
-                  0.5,
-                  '💻 ING. DE SISTEMAS: ESFERAS IA & DINO PIXEL ACTIVOS'
-                );
-              }}
-              className={`px-4 py-2.5 rounded-2xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-all ${
-                selectedCareer === 'SIS'
-                  ? 'bg-[#FF6B00] text-black shadow-neon-orange scale-[1.02]'
-                  : 'bg-white/5 hover:bg-white/10 text-white/80 border border-white/10'
-              }`}
-            >
-              <Code2 className="w-4 h-4" />
-              <span>💻 Ing. de Sistemas</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setSelectedCareer('DER');
-                const now = performance.now();
-                trackingRef.current.persons.forEach((p) => {
-                  p.scanStartTime = now;
-                  p.rouletteStartTime = now;
-                });
-                triggerEnergyShockwave(
-                  0.5,
-                  0.5,
-                  '⚖️ DERECHO: BALANZA HOLOGRÁFICA & ESCUDO LEGALTECH'
-                );
-              }}
-              className={`px-4 py-2.5 rounded-2xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-all ${
-                selectedCareer === 'DER'
-                  ? 'bg-[#FF6B00] text-black shadow-neon-orange scale-[1.02]'
-                  : 'bg-white/5 hover:bg-white/10 text-white/80 border border-white/10'
+              onClick={() => selectCarrera('derecho')}
+              aria-pressed={carrera === 'derecho'}
+              className={`px-4 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors ${
+                carrera === 'derecho'
+                  ? 'bg-[#FF6B00] text-black'
+                  : 'bg-white/5 hover:bg-white/10 text-white/75 border border-white/10'
               }`}
             >
               <Scale className="w-4 h-4" />
-              <span>⚖️ Derecho</span>
+              <span>Derecho</span>
+            </button>
+
+            <button
+              onClick={() => selectCarrera('sistemas')}
+              aria-pressed={carrera === 'sistemas'}
+              className={`px-4 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors ${
+                carrera === 'sistemas'
+                  ? 'bg-[#FF6B00] text-black'
+                  : 'bg-white/5 hover:bg-white/10 text-white/75 border border-white/10'
+              }`}
+            >
+              <Code2 className="w-4 h-4" />
+              <span>Ing. de Sistemas</span>
             </button>
           </div>
 
-          {/* Center Hero Capture CTA Button */}
+          <div className="flex flex-wrap items-center justify-center gap-2 bg-black/45 p-1.5 rounded-2xl border border-white/10">
+            <span className="hidden xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-white/50 px-2">
+              Accesorios
+            </span>
+            <button
+              onClick={() =>
+                setAccesorios((prev) => {
+                  const next = !prev.lentesVR;
+                  showBanner(next ? '🥽 LENTES VR ACTIVADOS' : 'LENTES VR DESACTIVADOS');
+                  return { ...prev, lentesVR: next };
+                })
+              }
+              aria-pressed={accesorios.lentesVR}
+              className={`px-3.5 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors border ${
+                accesorios.lentesVR
+                  ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
+                  : 'bg-white/5 border-white/10 text-white/55 hover:text-white'
+              }`}
+              title="Activar/Desactivar Lentes VR sobre los ojos"
+            >
+              <Glasses className="w-4 h-4" />
+              <span>Lentes VR</span>
+            </button>
+
+            <button
+              onClick={() =>
+                setAccesorios((prev) => {
+                  const next = !prev.hud;
+                  showBanner(next ? '✨ HUD FUTURISTA ACTIVADO' : 'HUD DESACTIVADO');
+                  return { ...prev, hud: next };
+                })
+              }
+              aria-pressed={accesorios.hud}
+              className={`px-3.5 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors border ${
+                accesorios.hud
+                  ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
+                  : 'bg-white/5 border-white/10 text-white/55 hover:text-white'
+              }`}
+              title="Activar/Desactivar Escáner y Tarjeta HUD"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>HUD</span>
+            </button>
+          </div>
+
           <button
             onClick={() => startPhotoCountdown('📸 CAPTURANDO MOMENTO UNIFRANZ...')}
             disabled={countdown !== null}
-            className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-gradient-to-r from-[#FF6B00] via-[#FF5500] to-[#FF6B00] hover:from-[#FF7A1A] hover:to-[#FF5500] text-black font-display font-black text-xs md:text-sm tracking-wider uppercase flex items-center justify-center gap-2.5 animate-pulse-glow transition transform active:scale-95 disabled:opacity-50"
+            className="w-full lg:w-auto px-7 py-3 rounded-2xl bg-gradient-to-r from-[#FF6B00] to-[#FF5500] hover:from-[#FF7A1A] hover:to-[#FF6B00] text-black font-display font-black text-xs md:text-sm tracking-wider uppercase flex items-center justify-center gap-2.5 animate-cta-pulse transition-transform active:scale-95 disabled:opacity-50"
           >
             <Camera className="w-5 h-5 stroke-[2.5]" />
-            <span>📸 CAPTURAR MOMENTO UNIFRANZ</span>
+            <span>Capturar Foto</span>
           </button>
-
-          {/* Right Group: VR Metaverse & Cyberpunk HUD Toggles */}
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <button
-              onClick={() => {
-                setVrEnabled((prev) => {
-                  const next = !prev;
-                  triggerEnergyShockwave(
-                    0.5,
-                    0.5,
-                    next
-                      ? '🥽 METAVERSO UNIFRANZ & LENTES VR ACTIVADOS'
-                      : 'LENTES VR DESACTIVADOS'
-                  );
-                  return next;
-                });
-              }}
-              className={`px-3.5 py-2.5 rounded-2xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
-                vrEnabled
-                  ? 'bg-[#FF6B00]/20 border-[#FF6B00] text-[#FF6B00] shadow-[0_0_15px_rgba(255,107,0,0.35)]'
-                  : 'bg-white/5 border-white/10 text-white/60 hover:text-white'
-              }`}
-              title="Activar/Desactivar Lentes VR y Fondo Metaverso Tron"
-            >
-              <Glasses className="w-4 h-4" />
-              <span>🥽 Lentes VR + Metaverso</span>
-            </button>
-
-            <button
-              onClick={() => setHudEnabled((prev) => !prev)}
-              className={`px-3.5 py-2.5 rounded-2xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-all border ${
-                hudEnabled
-                  ? 'bg-[#FF6B00]/20 border-[#FF6B00] text-[#FF6B00] shadow-[0_0_15px_rgba(255,107,0,0.35)]'
-                  : 'bg-white/5 border-white/10 text-white/60 hover:text-white'
-              }`}
-              title="Activar/Desactivar Escáner y Efectos HUD"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>✨ HUD</span>
-            </button>
-          </div>
         </div>
       </footer>
 
-      {/* Commemorative Souvenir Photo + QR Code Modal */}
       <PhotoModal photoData={capturedPhoto} onClose={() => setCapturedPhoto(null)} />
     </div>
   );

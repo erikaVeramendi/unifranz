@@ -1,25 +1,26 @@
 import React from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { Download, X, Sparkles, Share2, CheckCircle2, Camera } from 'lucide-react';
+import { Download, X, Sparkles, CheckCircle2, Camera } from 'lucide-react';
 import UnifranzLogo from './UnifranzLogo';
 
 export default function PhotoModal({ photoData, onClose }) {
   if (!photoData) return null;
 
-  const { framedDataUrl, careerLabel, timestamp, sharePayload } = photoData;
+  const { framedDataUrl, careerLabel, careerShort, timestamp, sharePayload } = photoData;
 
   const handleDownload = () => {
     const link = document.createElement('a');
     link.href = framedDataUrl;
-    link.download = `UNIFRANZ-AR-${careerLabel.replace(/\s+/g, '-')}-${Date.now()}.png`;
+    const slug = (careerShort || careerLabel || 'AR').replace(/\s+/g, '-');
+    link.download = `UNIFRANZ-AR-${slug}-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-center justify-center p-4 md:p-6 animate-fadeIn">
-      <div className="relative max-w-4xl w-full glass-panel-bright rounded-3xl border border-[#FF6B00] p-5 md:p-7 shadow-neon-strong overflow-hidden max-h-[94vh] flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 md:p-6">
+      <div className="relative max-w-4xl w-full glass-panel-bright rounded-3xl border border-[#FF6B00] p-5 md:p-7 overflow-hidden max-h-[94vh] flex flex-col">
         {/* Top Bar */}
         <div className="flex items-center justify-between pb-4 mb-4 border-b border-white/15">
           <div className="flex items-center gap-3">
@@ -46,13 +47,13 @@ export default function PhotoModal({ photoData, onClose }) {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center overflow-y-auto pr-1">
           {/* Framed Photo Preview */}
           <div className="lg:col-span-7 flex flex-col items-center">
-            <div className="relative rounded-2xl overflow-hidden border-2 border-[#FF6B00] shadow-neon-orange bg-black max-h-[58vh] flex items-center justify-center">
+            <div className="relative rounded-2xl overflow-hidden border-2 border-[#FF6B00] bg-black max-h-[58vh] flex items-center justify-center">
               <img
                 src={framedDataUrl}
                 alt="Recuerdo UNIFRANZ AR"
                 className="max-h-[56vh] w-auto object-contain"
               />
-              <div className="absolute top-3 right-3 px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-[#FF6B00]/60 text-[10px] font-display font-bold text-[#FF6B00] tracking-wider uppercase">
+              <div className="absolute top-3 right-3 px-3 py-1 rounded-full bg-black/85 border border-[#FF6B00]/70 text-[10px] font-display font-bold text-[#FF6B00] tracking-wider uppercase">
                 #InnovaciónUnifranz
               </div>
             </div>
@@ -61,8 +62,8 @@ export default function PhotoModal({ photoData, onClose }) {
           {/* Instant QR Code & Download Actions */}
           <div className="lg:col-span-5 flex flex-col items-center lg:items-stretch text-center lg:text-left space-y-4">
             <div className="inline-flex items-center self-center lg:self-start gap-2 px-3 py-1 rounded-full bg-[#FF6B00]/20 border border-[#FF6B00]/50 text-[#FF6B00] text-xs font-tech font-semibold">
-              <CheckCircle2 className="w-4 h-4" />
-              {careerLabel}
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{careerLabel}</span>
             </div>
 
             <h3 className="font-display font-extrabold text-xl md:text-2xl text-white leading-tight">
@@ -74,7 +75,7 @@ export default function PhotoModal({ photoData, onClose }) {
             </p>
 
             {/* QR Code Box */}
-            <div className="p-4 rounded-2xl bg-white text-black flex flex-col items-center justify-center self-center lg:self-start shadow-neon-orange border-2 border-[#FF6B00]">
+            <div className="p-4 rounded-2xl bg-white text-black flex flex-col items-center justify-center self-center lg:self-start border-2 border-[#FF6B00]">
               <QRCodeCanvas
                 value={sharePayload}
                 size={152}
@@ -92,7 +93,7 @@ export default function PhotoModal({ photoData, onClose }) {
             <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 pt-2 w-full">
               <button
                 onClick={handleDownload}
-                className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-[#FF6B00] to-[#FF5500] hover:from-[#FF7B1A] hover:to-[#FF6B00] text-black font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2.5 shadow-neon-orange transition transform active:scale-95"
+                className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-[#FF6B00] to-[#FF5500] hover:from-[#FF7B1A] hover:to-[#FF6B00] text-black font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2.5 transition active:scale-95"
               >
                 <Download className="w-4 h-4" />
                 Descargar Foto PNG (HD)

@@ -1,4 +1,5 @@
-// Advanced Math & Holographic AR Renderers for UNIFRANZ AR Mirror Experience (Nueva Malla 2026)
+// Renderizadores AR optimizados para UNIFRANZ AR Mirror (Nueva Malla 2026)
+import { AR_CONFIG, CAREERS } from '../config.js';
 
 export const lerp = (start, end, factor) => start + (end - start) * factor;
 
@@ -9,29 +10,12 @@ export const lerpAngle = (a, b, t) => {
 
 export const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
 
-// Future Roles for Nueva Malla Curricular Roulette
 export const FUTURE_ROLES = {
-  SIS: [
-    'Arquitecto de Inteligencia Artificial',
-    'Ingeniero Cloud & DevOps',
-    'Especialista en Ciberseguridad',
-    'Líder en Innovación Digital',
-  ],
-  DER: [
-    'Especialista en Derecho Digital & LegalTech',
-    'Experto en Litigación Estratégica',
-    'Consultor en Derecho Corporativo Global',
-    'Defensor de Derechos Humanos & Tecnología',
-  ],
-  VR_ONLY: [
-    'Arquitecto de Inteligencia Artificial',
-    'Especialista en Derecho Digital & LegalTech',
-    'Líder en Innovación Digital',
-    'Consultor en Derecho Corporativo Global',
-  ],
+  sistemas: CAREERS.sistemas.roles,
+  derecho: CAREERS.derecho.roles,
 };
 
-// Pixel Art T-Rex frames (Frame 0: left leg step, Frame 1: right leg step)
+// Pixel Art T-Rex frames (Frame 0: paso izquierdo, Frame 1: paso derecho)
 export const DINO_WALK_FRAMES = [
   [
     [0,0,0,0,0,0,1,1,1,1,1,0],
@@ -88,62 +72,129 @@ export function drawPixelDino(ctx, x, y, pixelSize = 2.5, color = '#FF6B00', alp
   ctx.restore();
 }
 
-// Companion Pixel Dino walking smoothly along person's left shoulder
+// Elemento Sistemas: Dino Pixel caminando sobre el hombro izquierdo
 export function drawWalkingShoulderDino(ctx, shoulderCenterX, shoulderCenterY, shoulderWidth, shoulderAngle, time) {
   ctx.save();
   ctx.translate(shoulderCenterX, shoulderCenterY);
   ctx.rotate(shoulderAngle);
 
-  // Left shoulder area (on mirrored screen, person's left shoulder is to the right side of torso center)
   const patrolCenter = shoulderWidth * 0.34;
   const patrolRange = shoulderWidth * 0.14;
   const walkCycle = time * 0.0022;
   const offsetX = patrolCenter + Math.sin(walkCycle) * patrolRange;
-  const dir = Math.cos(walkCycle); // >0 moving right, <0 moving left
+  const dir = Math.cos(walkCycle);
   const bounceY = -Math.abs(Math.sin(time * 0.012)) * 4;
   const baseOffsetY = -shoulderWidth * 0.22 + bounceY;
 
   const frameIdx = Math.floor(time / 160) % 2;
-  const pSize = clamp(shoulderWidth * 0.016, 2.2, 4.2);
+  const pSize = clamp(shoulderWidth * AR_CONFIG.DINO_PIXEL_FACTOR, 2.2, 4.4);
 
-  // Glowing holographic platform under dino's feet
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
+  // Plataforma holográfica bajo el dino (sin shadowBlur costoso)
   ctx.fillStyle = 'rgba(255, 107, 0, 0.45)';
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 10;
   ctx.beginPath();
   ctx.ellipse(offsetX, baseOffsetY + pSize * 6, pSize * 6, pSize * 1.4, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // White pixel-art dino with neon orange glow
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 12;
   drawPixelDino(ctx, offsetX, baseOffsetY, pSize, '#FFFFFF', 0.98, frameIdx, dir < 0);
 
-  // Mini floating tag above dino
   ctx.font = '700 9px "Orbitron", monospace';
   ctx.fillStyle = '#FF6B00';
   ctx.textAlign = 'center';
   ctx.fillText('SIS-BOT', offsetX, baseOffsetY - pSize * 6.8);
-  ctx.restore();
 
   ctx.restore();
 }
 
-// Calculate palm center and inclination angle from landmarks 0, 5, 9, 13, 17
+// Elemento Derecho: Emblema de Balanza Holográfica anclado al hombro de la persona
+export function drawShoulderScalesEmblem(ctx, shoulderCenterX, shoulderCenterY, shoulderWidth, shoulderAngle, time) {
+  ctx.save();
+  ctx.translate(shoulderCenterX, shoulderCenterY);
+  ctx.rotate(shoulderAngle);
+
+  const offsetX = -shoulderWidth * 0.36;
+  const bounceY = Math.sin(time * 0.004) * 3.5;
+  const offsetY = -shoulderWidth * 0.24 + bounceY;
+  const size = clamp(shoulderWidth * 0.16, 18, 36);
+  const tilt = Math.sin(time * 0.0028) * 0.16;
+
+  ctx.translate(offsetX, offsetY);
+
+  // Base luminosa
+  ctx.fillStyle = 'rgba(255, 107, 0, 0.22)';
+  ctx.strokeStyle = 'rgba(255, 107, 0, 0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.95, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Pilar central y base de balanza
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.35, size * 0.48);
+  ctx.lineTo(size * 0.35, size * 0.48);
+  ctx.moveTo(0, size * 0.48);
+  ctx.lineTo(0, -size * 0.42);
+  ctx.stroke();
+
+  // Brazo basculante
+  ctx.save();
+  ctx.translate(0, -size * 0.34);
+  ctx.rotate(tilt);
+  const beamHalf = size * 0.52;
+  ctx.strokeStyle = '#FF6B00';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-beamHalf, 0);
+  ctx.lineTo(beamHalf, 0);
+  ctx.stroke();
+
+  [-beamHalf, beamHalf].forEach((bx) => {
+    ctx.save();
+    ctx.translate(bx, 0);
+    ctx.rotate(-tilt);
+    const drop = size * 0.38;
+    const panW = size * 0.22;
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-panW, drop);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(panW, drop);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 107, 0, 0.65)';
+    ctx.beginPath();
+    ctx.arc(0, drop, panW, 0, Math.PI, false);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  });
+  ctx.restore();
+
+  ctx.font = '700 9px "Orbitron", monospace';
+  ctx.fillStyle = '#FF6B00';
+  ctx.textAlign = 'center';
+  ctx.fillText('LEX-AR', 0, size * 1.25);
+
+  ctx.restore();
+}
+
+// Calcula centro de palma e inclinación a partir de landmarks 0, 5, 9, 13, 17
 export function computePalmCenterAndTilt(handLm, toScreenX, toScreenY) {
   const indices = [0, 5, 9, 13, 17];
   let sumX = 0;
   let sumY = 0;
-  indices.forEach((idx) => {
+  for (let i = 0; i < indices.length; i++) {
+    const idx = indices[i];
     sumX += toScreenX(handLm[idx].x);
     sumY += toScreenY(handLm[idx].y);
-  });
+  }
   const cx = sumX / indices.length;
   const cy = sumY / indices.length;
 
-  // Compute hand tilt from index MCP (5) to pinky MCP (17) + wrist (0) to middle MCP (9)
   const p5x = toScreenX(handLm[5].x);
   const p5y = toScreenY(handLm[5].y);
   const p17x = toScreenX(handLm[17].x);
@@ -153,7 +204,6 @@ export function computePalmCenterAndTilt(handLm, toScreenX, toScreenY) {
   const middleX = toScreenX(handLm[9].x);
   const palmSpan = Math.hypot(p17x - p5x, p17y - p5y);
 
-  // Horizontal inclination angle based on hand sideways lean and knuckle line
   const knuckleTilt = Math.atan2(p17y - p5y, Math.abs(p17x - p5x) + 1);
   const lateralLean = clamp((middleX - wristX) / (palmSpan + 20), -0.65, 0.65);
   const tiltAngle = clamp(lateralLean * 0.7 + knuckleTilt * 0.35, -0.6, 0.6);
@@ -161,25 +211,25 @@ export function computePalmCenterAndTilt(handLm, toScreenX, toScreenY) {
   return { x: cx, y: cy, tiltAngle, palmSpan };
 }
 
-// SIS Power 1: Neural Network & Binary Code Holographic Sphere rotating on palm center
-export function drawNeuralBinarySphere(ctx, x, y, radius = 48, time = 0) {
+// Poder Sistemas 1: Esfera holográfica de red neuronal y código binario
+export function drawNeuralBinarySphere(ctx, x, y, radius = 48, time = 0, opacity = 1) {
+  if (opacity <= 0.02) return;
   ctx.save();
+  ctx.globalAlpha = opacity;
   ctx.globalCompositeOperation = 'lighter';
   ctx.translate(x, y);
 
-  // Core radial glow
-  const coreGrad = ctx.createRadialGradient(0, 0, radius * 0.08, 0, 0, radius * 1.35);
-  coreGrad.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
-  coreGrad.addColorStop(0.25, 'rgba(255, 107, 0, 0.65)');
-  coreGrad.addColorStop(0.7, 'rgba(255, 85, 0, 0.18)');
+  const coreGrad = ctx.createRadialGradient(0, 0, radius * 0.08, 0, 0, radius * 1.25);
+  coreGrad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+  coreGrad.addColorStop(0.28, 'rgba(255, 107, 0, 0.58)');
+  coreGrad.addColorStop(0.7, 'rgba(255, 85, 0, 0.16)');
   coreGrad.addColorStop(1, 'rgba(255, 107, 0, 0)');
   ctx.fillStyle = coreGrad;
   ctx.beginPath();
-  ctx.arc(0, 0, radius * 1.35, 0, Math.PI * 2);
+  ctx.arc(0, 0, radius * 1.25, 0, Math.PI * 2);
   ctx.fill();
 
-  // 3D Rotating Neural Nodes on a sphere
-  const nodeCount = 14;
+  const nodeCount = 12;
   const nodes = [];
   const rotY = time * 0.0024;
   const rotX = time * 0.0016;
@@ -200,14 +250,13 @@ export function drawNeuralBinarySphere(ctx, x, y, radius = 48, time = 0) {
     });
   }
 
-  // Draw neural synaptic connections
-  ctx.lineWidth = 1.3;
+  ctx.lineWidth = 1.2;
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const dist = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
-      if (dist < radius * 0.78) {
-        const alpha = clamp((nodes[i].z + nodes[j].z + 2) * 0.22, 0.12, 0.75);
-        ctx.strokeStyle = i % 2 === 0 ? `rgba(255, 107, 0, ${alpha})` : `rgba(255, 255, 255, ${alpha * 0.8})`;
+      if (dist < radius * 0.82) {
+        const alpha = clamp((nodes[i].z + nodes[j].z + 2) * 0.22, 0.12, 0.7);
+        ctx.strokeStyle = i % 2 === 0 ? `rgba(255, 107, 0, ${alpha})` : `rgba(255, 255, 255, ${alpha * 0.75})`;
         ctx.beginPath();
         ctx.moveTo(nodes[i].x, nodes[i].y);
         ctx.lineTo(nodes[j].x, nodes[j].y);
@@ -216,13 +265,10 @@ export function drawNeuralBinarySphere(ctx, x, y, radius = 48, time = 0) {
     }
   }
 
-  // Outer gyroscope orbital rings
   ctx.save();
   ctx.rotate(rotY);
   ctx.strokeStyle = '#FF6B00';
-  ctx.lineWidth = 2;
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 12;
+  ctx.lineWidth = 1.8;
   ctx.setLineDash([10, 6]);
   ctx.beginPath();
   ctx.ellipse(0, 0, radius, radius * 0.42, 0, 0, Math.PI * 2);
@@ -232,59 +278,51 @@ export function drawNeuralBinarySphere(ctx, x, y, radius = 48, time = 0) {
   ctx.save();
   ctx.rotate(-rotY * 1.2 + 1.1);
   ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.4;
   ctx.setLineDash([6, 8]);
   ctx.beginPath();
   ctx.ellipse(0, 0, radius * 0.92, radius * 0.38, 0, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 
-  // Draw glowing binary digits at nodes
   ctx.font = '800 10px "Orbitron", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  nodes.forEach((n) => {
-    const scale = 0.75 + (n.z + 1) * 0.35;
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
     ctx.fillStyle = n.z > 0 ? '#FFFFFF' : '#FF6B00';
-    ctx.shadowColor = '#FF6B00';
-    ctx.shadowBlur = 8;
     ctx.fillText(n.bit, n.x, n.y);
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, 2 * scale, 0, Math.PI * 2);
-    ctx.fill();
-  });
+  }
 
   ctx.restore();
 }
 
-// SIS Power 2: Digital Fusion Energy Core when both hands come together near chest
-export function drawDigitalFusionCore(ctx, x, y, radius = 82, time = 0) {
+// Poder Sistemas 2: Núcleo de Fusión Digital cuando ambas manos se acercan
+export function drawDigitalFusionCore(ctx, x, y, radius = 82, time = 0, opacity = 1) {
+  if (opacity <= 0.02) return;
   ctx.save();
+  ctx.globalAlpha = opacity;
   ctx.globalCompositeOperation = 'lighter';
   ctx.translate(x, y);
 
-  const pulse = 1 + Math.sin(time * 0.015) * 0.14;
+  const pulse = 1 + Math.sin(time * 0.015) * 0.12;
   const r = radius * pulse;
 
-  // Intense plasma aura
-  const aura = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r * 1.7);
+  const aura = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r * 1.6);
   aura.addColorStop(0, '#FFFFFF');
-  aura.addColorStop(0.22, '#FF8C00');
-  aura.addColorStop(0.55, 'rgba(255, 107, 0, 0.55)');
+  aura.addColorStop(0.25, '#FF8C00');
+  aura.addColorStop(0.55, 'rgba(255, 107, 0, 0.5)');
   aura.addColorStop(1, 'rgba(255, 85, 0, 0)');
   ctx.fillStyle = aura;
   ctx.beginPath();
-  ctx.arc(0, 0, r * 1.7, 0, Math.PI * 2);
+  ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2);
   ctx.fill();
 
-  // High-speed energy arcs
   for (let i = 0; i < 3; i++) {
     ctx.save();
     ctx.rotate(time * (0.004 + i * 0.002) * (i % 2 === 0 ? 1 : -1));
     ctx.strokeStyle = i === 0 ? '#FFFFFF' : '#FF6B00';
     ctx.lineWidth = 3 - i * 0.6;
-    ctx.shadowColor = '#FF6B00';
-    ctx.shadowBlur = 20;
     ctx.setLineDash([18, 10]);
     ctx.beginPath();
     ctx.arc(0, 0, r * (0.65 + i * 0.2), 0, Math.PI * 2);
@@ -292,38 +330,35 @@ export function drawDigitalFusionCore(ctx, x, y, radius = 82, time = 0) {
     ctx.restore();
   }
 
-  // Core label
   ctx.fillStyle = '#FFFFFF';
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 16;
-  ctx.font = '900 14px "Orbitron", sans-serif';
+  ctx.font = '900 13px "Orbitron", sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('AI CORE // FUSIÓN DIGITAL', 0, r + 24);
+  ctx.fillText('AI CORE // FUSIÓN DIGITAL', 0, r + 22);
 
   ctx.restore();
 }
 
-// DER Power 1: Holographic Scales of Justice that tilt dynamically with hand inclination
-export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTilt = null) {
+// Poder Derecho 1: Balanza Holográfica sobre palma que se inclina con la mano
+export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTilt = null, opacity = 1) {
+  if (opacity <= 0.02) return;
   const hoverOffset = Math.sin(time * 0.005) * 5;
   const tilt = dynamicTilt !== null ? clamp(dynamicTilt, -0.55, 0.55) : Math.sin(time * 0.003) * 0.14;
   const cy = y + hoverOffset;
 
   ctx.save();
+  ctx.globalAlpha = opacity;
   ctx.globalCompositeOperation = 'lighter';
   ctx.translate(x, cy);
 
-  // Outer holographic ring aura
-  const grad = ctx.createRadialGradient(0, 0, size * 0.15, 0, 0, size * 1.2);
-  grad.addColorStop(0, 'rgba(255, 107, 0, 0.45)');
-  grad.addColorStop(0.6, 'rgba(255, 185, 50, 0.16)');
+  const grad = ctx.createRadialGradient(0, 0, size * 0.15, 0, 0, size * 1.15);
+  grad.addColorStop(0, 'rgba(255, 107, 0, 0.42)');
+  grad.addColorStop(0.6, 'rgba(255, 185, 50, 0.14)');
   grad.addColorStop(1, 'rgba(255, 107, 0, 0)');
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.arc(0, 0, size * 1.2, 0, Math.PI * 2);
+  ctx.arc(0, 0, size * 1.15, 0, Math.PI * 2);
   ctx.fill();
 
-  // Rotating dashed tech ring
   ctx.save();
   ctx.rotate(time * 0.0018);
   ctx.strokeStyle = 'rgba(255, 107, 0, 0.85)';
@@ -334,11 +369,8 @@ export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTil
   ctx.stroke();
   ctx.restore();
 
-  // Scales pillar & base
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 16;
   ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 2.6;
+  ctx.lineWidth = 2.4;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -351,26 +383,23 @@ export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTil
   ctx.lineTo(0, -size * 0.48);
   ctx.stroke();
 
-  // Top crown node
   ctx.fillStyle = '#FF6B00';
   ctx.beginPath();
-  ctx.arc(0, -size * 0.52, 5, 0, Math.PI * 2);
+  ctx.arc(0, -size * 0.52, 4.5, 0, Math.PI * 2);
   ctx.fill();
 
-  // Dynamic Balance Crossbeam
   ctx.save();
   ctx.translate(0, -size * 0.38);
   ctx.rotate(tilt);
 
   const beamHalf = size * 0.58;
   ctx.strokeStyle = '#FF6B00';
-  ctx.lineWidth = 2.8;
+  ctx.lineWidth = 2.6;
   ctx.beginPath();
   ctx.moveTo(-beamHalf, 0);
   ctx.lineTo(beamHalf, 0);
   ctx.stroke();
 
-  // Left and Right pans (hang vertically from tilted beam)
   [-beamHalf, beamHalf].forEach((bx) => {
     ctx.save();
     ctx.translate(bx, 0);
@@ -380,7 +409,7 @@ export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTil
     const panW = size * 0.25;
 
     ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 1.7;
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.lineTo(-panW, dropH);
@@ -390,7 +419,7 @@ export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTil
 
     ctx.fillStyle = 'rgba(255, 107, 0, 0.55)';
     ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.8;
     ctx.beginPath();
     ctx.arc(0, dropH, panW, 0, Math.PI, false);
     ctx.closePath();
@@ -410,9 +439,11 @@ export function drawHolographicScales(ctx, x, y, size = 56, time = 0, dynamicTil
   ctx.restore();
 }
 
-// DER Power 2: Hexagonal LegalTech Shield in front of torso when both hands are raised
-export function drawLegalTechShield(ctx, centerX, centerY, radius = 130, time = 0) {
+// Poder Derecho 2: Escudo LegalTech hexagonal cuando ambas manos están levantadas
+export function drawLegalTechShield(ctx, centerX, centerY, radius = 130, time = 0, opacity = 1) {
+  if (opacity <= 0.02) return;
   ctx.save();
+  ctx.globalAlpha = opacity;
   ctx.globalCompositeOperation = 'lighter';
   ctx.translate(centerX, centerY);
 
@@ -431,56 +462,47 @@ export function drawLegalTechShield(ctx, centerX, centerY, radius = 130, time = 
     ctx.closePath();
   };
 
-  // Translucent hexagonal energy field
   const hexGrad = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R);
   hexGrad.addColorStop(0, 'rgba(255, 107, 0, 0.12)');
   hexGrad.addColorStop(0.7, 'rgba(255, 107, 0, 0.28)');
-  hexGrad.addColorStop(1, 'rgba(255, 255, 255, 0.45)');
+  hexGrad.addColorStop(1, 'rgba(255, 255, 255, 0.42)');
 
   drawHex(R);
   ctx.fillStyle = hexGrad;
   ctx.fill();
 
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 22;
   ctx.strokeStyle = '#FF6B00';
-  ctx.lineWidth = 3.5;
+  ctx.lineWidth = 3.2;
   ctx.stroke();
 
-  // Inner concentric white hexagon
   drawHex(R * 0.82);
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-  ctx.lineWidth = 1.8;
+  ctx.lineWidth = 1.6;
   ctx.setLineDash([14, 8]);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Corner nodes
   for (let i = 0; i < 6; i++) {
     const angle = (Math.PI / 3) * i - Math.PI / 6;
-    const hx = Math.cos(angle) * R;
-    const hy = Math.sin(angle) * R;
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
-    ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+    ctx.arc(Math.cos(angle) * R, Math.sin(angle) * R, 4, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Banner inside Shield: "JUSTICIA & INNOVACIÓN"
-  ctx.fillStyle = 'rgba(10, 10, 10, 0.82)';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = 'rgba(10, 10, 10, 0.86)';
   ctx.strokeStyle = '#FF6B00';
   ctx.lineWidth = 1.8;
   const bw = R * 1.65;
-  const bh = 38;
+  const bh = 36;
   ctx.beginPath();
   ctx.roundRect(-bw / 2, -bh / 2, bw, bh, 8);
   ctx.fill();
   ctx.stroke();
 
   ctx.fillStyle = '#FFFFFF';
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 12;
-  ctx.font = `900 ${Math.max(12, Math.round(R * 0.115))}px "Orbitron", sans-serif`;
+  ctx.font = `900 ${Math.max(11, Math.round(R * 0.11))}px "Orbitron", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('JUSTICIA & INNOVACIÓN', 0, 0);
@@ -492,11 +514,10 @@ export function drawLegalTechShield(ctx, centerX, centerY, radius = 130, time = 
   ctx.restore();
 }
 
-// Tron / Cyberspace Perspective Grid Backdrop for UNIFRANZ Metaverse VR Mode
+// Fondo Metaverso Tron (ligero, sin shadowBlur)
 export function drawMetaverseTronGrid(ctx, W, H, time = 0) {
   ctx.save();
 
-  // Deep #0A0A0A Cyberspace background
   const bg = ctx.createLinearGradient(0, 0, 0, H);
   bg.addColorStop(0, '#050505');
   bg.addColorStop(0.45, '#0A0A0A');
@@ -507,55 +528,37 @@ export function drawMetaverseTronGrid(ctx, W, H, time = 0) {
 
   const horizonY = H * 0.48;
 
-  // Glowing horizon core line
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  const hGlow = ctx.createLinearGradient(0, horizonY - 25, 0, horizonY + 25);
-  hGlow.addColorStop(0, 'rgba(255, 107, 0, 0)');
-  hGlow.addColorStop(0.5, 'rgba(255, 107, 0, 0.55)');
-  hGlow.addColorStop(1, 'rgba(255, 107, 0, 0)');
-  ctx.fillStyle = hGlow;
-  ctx.fillRect(0, horizonY - 25, W, 50);
+  ctx.strokeStyle = 'rgba(255, 107, 0, 0.65)';
+  ctx.lineWidth = 1.5;
 
-  ctx.strokeStyle = '#FF6B00';
-  ctx.lineWidth = 2;
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 16;
-
-  // Perspective radial lines from vanishing point (Bottom Floor & Top Ceiling)
   const vpX = W * 0.5;
-  const numRays = 20;
+  const numRays = 16;
   ctx.beginPath();
   for (let i = -numRays; i <= numRays; i++) {
     const spread = (i / numRays) * W * 1.45;
-    // Floor rays
     ctx.moveTo(vpX, horizonY);
     ctx.lineTo(vpX + spread, H);
-    // Ceiling rays
     ctx.moveTo(vpX, horizonY);
     ctx.lineTo(vpX + spread, 0);
   }
   ctx.stroke();
 
-  // Animated forward-moving horizontal perspective grid lines
   const speedOffset = (time * 0.00085) % 1;
-  const numRows = 12;
+  const numRows = 10;
   for (let r = 0; r < numRows; r++) {
     const t = (r + speedOffset) / numRows;
     const perspective = Math.pow(t, 2.25);
 
-    // Floor horizontal line
     const fy = horizonY + perspective * (H - horizonY);
-    ctx.strokeStyle = `rgba(255, 107, 0, ${clamp(perspective * 0.85, 0.08, 0.85)})`;
-    ctx.lineWidth = 1 + perspective * 1.8;
+    ctx.strokeStyle = `rgba(255, 107, 0, ${clamp(perspective * 0.8, 0.08, 0.8)})`;
+    ctx.lineWidth = 1 + perspective * 1.5;
     ctx.beginPath();
     ctx.moveTo(0, fy);
     ctx.lineTo(W, fy);
     ctx.stroke();
 
-    // Ceiling horizontal line
     const cy = horizonY - perspective * horizonY;
-    ctx.strokeStyle = `rgba(255, 107, 0, ${clamp(perspective * 0.5, 0.05, 0.5)})`;
+    ctx.strokeStyle = `rgba(255, 107, 0, ${clamp(perspective * 0.45, 0.05, 0.45)})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, cy);
@@ -564,10 +567,9 @@ export function drawMetaverseTronGrid(ctx, W, H, time = 0) {
   }
 
   ctx.restore();
-  ctx.restore();
 }
 
-// Multi-Person Synergy Beam connecting two detected students
+// Haz de Sinergia entre personas detectadas
 export function drawSynergyConnectionBeam(ctx, x1, y1, x2, y2, time = 0) {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -575,100 +577,47 @@ export function drawSynergyConnectionBeam(ctx, x1, y1, x2, y2, time = 0) {
   const midX = (x1 + x2) / 2;
   const midY = (y1 + y2) / 2;
 
-  // Main pulsing energy plasma beam
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 24;
-  ctx.strokeStyle = '#FF6B00';
-  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(255, 107, 0, 0.85)';
+  ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
   ctx.stroke();
 
-  // Animated sine-wave electricity along beam
   ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  const steps = 28;
+  const steps = 20;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const bx = lerp(x1, x2, t);
-    const by = lerp(y1, y2, t) + Math.sin(t * Math.PI * 5 + time * 0.014) * 14 * Math.sin(t * Math.PI);
+    const by = lerp(y1, y2, t) + Math.sin(t * Math.PI * 5 + time * 0.014) * 12 * Math.sin(t * Math.PI);
     if (i === 0) ctx.moveTo(bx, by);
     else ctx.lineTo(bx, by);
   }
   ctx.stroke();
 
-  // Anchor energy rings on each person
-  [
-    { x: x1, y: y1 },
-    { x: x2, y: y2 },
-  ].forEach((pt) => {
-    ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 7, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Central Badge: "SINERGIA UNIFRANZ • NUEVA MALLA 2026"
   ctx.globalCompositeOperation = 'source-over';
-  const badgeW = 325;
-  const badgeH = 38;
-  ctx.fillStyle = 'rgba(10, 10, 10, 0.92)';
+  const badgeW = 290;
+  const badgeH = 34;
+  ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
   ctx.strokeStyle = '#FF6B00';
-  ctx.lineWidth = 2.2;
-  ctx.shadowColor = '#FF6B00';
-  ctx.shadowBlur = 18;
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(midX - badgeW / 2, midY - badgeH / 2, badgeW, badgeH, 19);
+  ctx.roundRect(midX - badgeW / 2, midY - badgeH / 2, badgeW, badgeH, 17);
   ctx.fill();
   ctx.stroke();
 
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = '800 12px "Orbitron", sans-serif';
+  ctx.font = '800 11px "Orbitron", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('⚡ SINERGIA UNIFRANZ • NUEVA MALLA 2026', midX, midY);
+  ctx.fillText('⚡ SINERGIA UNIFRANZ • MALLA 2026', midX, midY);
 
   ctx.restore();
 }
 
-// Convert dark/black pixels of VR headset image to transparent if needed
-export function processVrHeadsetImage(img) {
-  const offCanvas = document.createElement('canvas');
-  offCanvas.width = img.naturalWidth || img.width;
-  offCanvas.height = img.naturalHeight || img.height;
-  const octx = offCanvas.getContext('2d');
-  octx.drawImage(img, 0, 0);
-
-  try {
-    const imgData = octx.getImageData(0, 0, offCanvas.width, offCanvas.height);
-    const data = imgData.data;
-    const cornerAlpha = data[3];
-    const cornerLuma = (data[0] + data[1] + data[2]) / 3;
-
-    if (cornerAlpha > 240 && cornerLuma < 18) {
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const maxCh = Math.max(r, g, b);
-        if (maxCh < 15) {
-          data[i + 3] = 0;
-        } else if (maxCh < 45) {
-          data[i + 3] = Math.floor(((maxCh - 15) / 30) * 255);
-        }
-      }
-      octx.putImageData(imgData, 0, 0);
-    }
-  } catch (e) {
-    // Fallback
-  }
-
-  return offCanvas;
-}
-
-// Detect hand gestures from MediaPipe HandLandmarker 21 points
+// Detecta gestos de mano a partir de los 21 landmarks
 export function analyzeHandGesture(landmarks) {
   if (!landmarks || landmarks.length < 21) return null;
 
@@ -702,10 +651,10 @@ export function analyzeHandGesture(landmarks) {
   return null;
 }
 
-// Detect genuine big smile from FaceLandmarker blendshapes or mouth landmarks
-export function detectSmileFromFace(faceLandmarks, faceBlendshapes, faceIdx = 0) {
-  if (faceBlendshapes && faceBlendshapes.length > faceIdx) {
-    const categories = faceBlendshapes[faceIdx].categories || [];
+// Detecta sonrisa amplia desde blendshapes o landmarks faciales
+export function detectSmileFromFace(faceLandmarks, faceBlendshapes) {
+  if (faceBlendshapes?.categories) {
+    const categories = faceBlendshapes.categories;
     const smileLeft = categories.find((c) => c.categoryName === 'mouthSmileLeft')?.score || 0;
     const smileRight = categories.find((c) => c.categoryName === 'mouthSmileRight')?.score || 0;
     if ((smileLeft + smileRight) / 2 > 0.68) {
