@@ -54,7 +54,7 @@ export default function PhotoModal({ photoData, onClose }) {
                 className="max-h-[56vh] w-auto object-contain"
               />
               <div className="absolute top-3 right-3 px-3 py-1 rounded-full bg-black/85 border border-[#FF6B00]/70 text-[10px] font-display font-bold text-[#FF6B00] tracking-wider uppercase">
-                #InnovaciónUnifranz
+                #NuevaMallaSistemas #Unifranz
               </div>
             </div>
           </div>

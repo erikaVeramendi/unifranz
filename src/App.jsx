@@ -6,17 +6,28 @@ import {
   HandLandmarker,
   ImageSegmenter,
 } from '@mediapipe/tasks-vision';
-import { AR_CONFIG, CAREERS, ASSETS_PATHS } from './config';
+import {
+  AR_CONFIG,
+  ACCESSORY_MODES,
+  SISTEMAS_CAREER,
+  ASSETS_PATHS,
+  SIS_QUIZ_QUESTIONS,
+} from './config';
 import {
   lerp,
   clamp,
   drawPixelDino,
-  drawWalkingShoulderDino,
-  drawShoulderScalesEmblem,
+  drawProceduralWhiteOculusQuest,
+  drawUnifranzHolographicCrown,
+  drawHackerHudVisor,
+  drawProceduralDualSenseController,
+  drawHolographicKeyboard,
+  drawSistemasOrbitalIcons,
   drawNeuralBinarySphere,
+  drawCybersecurityHandShield,
   drawDigitalFusionCore,
-  drawHolographicScales,
-  drawLegalTechShield,
+  drawHeadTiltQuizHUD,
+  drawQuizResultEffects,
   drawMetaverseTronGrid,
   drawSynergyConnectionBeam,
   detectSmileFromFace,
@@ -35,33 +46,44 @@ import UnifranzLogo from './components/UnifranzLogo';
 import {
   Camera,
   Code2,
-  Scale,
   Glasses,
   Sparkles,
   RefreshCw,
   Users,
   Layers,
+  Crown,
+  Terminal,
+  Gamepad2,
+  Keyboard,
+  Zap,
 } from 'lucide-react';
 
 export default function App() {
-  // === Estado de filtros separado en Carrera (única) y Accesorios (independientes) ===
-  // La carrera y los accesorios SOLO cambian mediante los botones de la interfaz.
-  const [carrera, setCarrera] = useState('sistemas'); // 'derecho' | 'sistemas'
-  const [accesorios, setAccesorios] = useState({
-    lentesVR: true,
-    hud: true,
-  });
+  // === 100% Ingeniería de Sistemas e Innovación Digital (Cero PNGs de poleras o lentes) ===
+  // Índice de Modo de Accesorio: 0 = Visor Oculus Blanco, 1 = Corona UNIFRANZ, 2 = Ambos, 3 = Modo Hacker HUD
+  const [accessoryModeIdx, setAccessoryModeIdx] = useState(0);
+  const [hudEnabled, setHudEnabled] = useState(true);
+  const [manualKeyboard, setManualKeyboard] = useState(false);
   const [fondoMetaverso, setFondoMetaverso] = useState(false);
   const [simTwoPersons, setSimTwoPersons] = useState(false);
+  const [simHandMode, setSimHandMode] = useState('POWERS'); // 'POWERS' | 'GAMING' | 'KEYBOARD' | 'FUSION'
+
+  // === Minijuego Interactivo: "¿Qué Mención de Sistemas eres?" (IA vs. Ciberseguridad) ===
+  const [quizUiState, setQuizUiState] = useState({
+    active: false,
+    winner: null, // null | 'IA' | 'CIBERSEGURIDAD'
+  });
 
   // Estados de carga y modal
   const [loadingProgress, setLoadingProgress] = useState(10);
-  const [loadingStatus, setLoadingStatus] = useState('Inicializando motor neuronal MediaPipe GPU...');
+  const [loadingStatus, setLoadingStatus] = useState(
+    'Inicializando motor neuronal MediaPipe GPU...'
+  );
   const [cameraError, setCameraError] = useState(null);
   const [isReady, setIsReady] = useState(false);
   const [isSimulationMode, setIsSimulationMode] = useState(false);
 
-  // Feedback de interfaz (solo eventos discretos, nunca por cuadro)
+  // Feedback de interfaz
   const [gestureBanner, setGestureBanner] = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [flashActive, setFlashActive] = useState(false);
@@ -83,27 +105,48 @@ export default function App() {
 
   // Espejo del estado en Ref para lectura instantánea dentro de requestAnimationFrame
   const stateRef = useRef({
-    carrera: 'sistemas',
-    lentesVR: true,
-    hud: true,
+    accessoryModeIdx: 0,
+    hudEnabled: true,
+    manualKeyboard: false,
     fondoMetaverso: false,
     isSimulationMode: false,
     simTwoPersons: false,
+    simHandMode: 'POWERS',
     countdownActive: false,
   });
 
   useEffect(() => {
-    stateRef.current.carrera = carrera;
-    stateRef.current.lentesVR = accesorios.lentesVR;
-    stateRef.current.hud = accesorios.hud;
+    stateRef.current.accessoryModeIdx = accessoryModeIdx;
+    stateRef.current.hudEnabled = hudEnabled;
+    stateRef.current.manualKeyboard = manualKeyboard;
     stateRef.current.fondoMetaverso = fondoMetaverso;
     stateRef.current.isSimulationMode = isSimulationMode;
     stateRef.current.simTwoPersons = simTwoPersons;
+    stateRef.current.simHandMode = simHandMode;
     stateRef.current.countdownActive = countdown !== null;
-    if (!fondoMetaverso) {
-      hasSegCacheRef.current = false;
-    }
-  }, [carrera, accesorios, fondoMetaverso, isSimulationMode, simTwoPersons, countdown]);
+  }, [
+    accessoryModeIdx,
+    hudEnabled,
+    manualKeyboard,
+    fondoMetaverso,
+    isSimulationMode,
+    simTwoPersons,
+    simHandMode,
+    countdown,
+  ]);
+
+  // Estado del Minijuego en Ref para actualización a 60 FPS
+  const quizRef = useRef({
+    active: false,
+    questionIdx: 0,
+    tiltSide: null, // 'LEFT' | 'RIGHT' | null
+    holdMs: 0,
+    lastFrameTs: 0,
+    aiVotes: 0,
+    cyberVotes: 0,
+    winner: null, // null | 'IA' | 'CIBERSEGURIDAD'
+    simTiltOverride: 0,
+  });
 
   // Modelos MediaPipe
   const landmarkersRef = useRef({
@@ -113,37 +156,39 @@ export default function App() {
     segmenter: null,
   });
 
-  // Imágenes PNG precargadas una sola vez al iniciar
+  // Solo se precarga el logo oficial de UNIFRANZ (los lentes, mandos, corona y teclado son 100% código)
   const assetsRef = useRef({
-    shirtSis: null,
-    shirtDer: null,
-    vrHeadset: null,
     logoImg: null,
   });
 
-  // Estado de seguimiento multi-persona, manos y partículas (100% en useRef)
+  // Estado de seguimiento multi-persona, manos, partículas y temporizador Tron de 4s
   const trackingRef = useRef({
     trackedPersons: [],
     trackedHands: [],
     proximity: 0.25,
+    tronFusionUntilTs: 0, // Marca de tiempo hasta la cual la Matriz Tron de 4s permanece activa
+    lastFusionTriggerTs: 0,
+    lastAccessorySwitchTs: 0,
+    peaceHoldFrames: 0,
     lastPhotoTriggerTime: 0,
-    peaceOrSmileHoldFrames: 0,
+    smileHoldFrames: 0,
     shockwaves: [],
     particles: [],
     burstParticles: [],
   });
 
-  // Inicializar partículas ambientales ligeras
+  // Inicializar partículas ambientales de Sistemas
   useEffect(() => {
     const pts = [];
-    for (let i = 0; i < 24; i++) {
+    const tokens = ['0', '1', 'AI', '{ }', '</>', 'DINO'];
+    for (let i = 0; i < 26; i++) {
       pts.push({
         x: Math.random(),
         y: Math.random(),
         vx: (Math.random() - 0.5) * 0.001,
         vy: -0.001 - Math.random() * 0.0018,
         size: 10 + Math.random() * 8,
-        type: i % 5 === 0 ? 'DINO' : i % 3 === 0 ? 'AI' : i % 2 === 0 ? '0' : '1',
+        type: tokens[i % tokens.length],
         alpha: 0.25 + Math.random() * 0.55,
         color: Math.random() > 0.35 ? '#FF6B00' : '#FFFFFF',
       });
@@ -151,7 +196,27 @@ export default function App() {
     trackingRef.current.particles = pts;
   }, []);
 
-  // Precargar assets una sola vez al inicio
+  // Soporte de flechas Izquierda/Derecha para responder el test en Modo Simulación
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!quizRef.current.active) return;
+      if (e.key === 'ArrowLeft') quizRef.current.simTiltOverride = -0.28;
+      if (e.key === 'ArrowRight') quizRef.current.simTiltOverride = 0.28;
+    };
+    const onKeyUp = (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        quizRef.current.simTiltOverride = 0;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
+  // Precargar logo oficial UNIFRANZ
   const preloadAssets = useCallback(async () => {
     const loadImg = (src, fallbackSrc = null) =>
       new Promise((resolve) => {
@@ -172,17 +237,7 @@ export default function App() {
         img.src = src;
       });
 
-    const [sisImg, derImg, vrImg, logoImg] = await Promise.all([
-      loadImg(CAREERS.sistemas.shirtPath),
-      loadImg(CAREERS.derecho.shirtPath),
-      loadImg(ASSETS_PATHS.vrHeadset),
-      loadImg(ASSETS_PATHS.logoPng, ASSETS_PATHS.logoSvg),
-    ]);
-
-    assetsRef.current.shirtSis = sisImg;
-    assetsRef.current.shirtDer = derImg;
-    assetsRef.current.vrHeadset = vrImg;
-    assetsRef.current.logoImg = logoImg;
+    assetsRef.current.logoImg = await loadImg(ASSETS_PATHS.logoPng, ASSETS_PATHS.logoSvg);
   }, []);
 
   // Inicializar cámara y modelos MediaPipe GPU
@@ -190,7 +245,7 @@ export default function App() {
     async (useSimulation = false) => {
       setCameraError(null);
       setLoadingProgress(15);
-      setLoadingStatus('Precargando filtros PNG optimizados...');
+      setLoadingStatus('Inicializando motores vectoriales Oculus Quest, DualSense & IA...');
       await preloadAssets();
 
       setLoadingProgress(35);
@@ -222,7 +277,7 @@ export default function App() {
       }
 
       setLoadingProgress(60);
-      setLoadingStatus('Cargando PoseLandmarker, FaceLandmarker y HandLandmarker (GPU)...');
+      setLoadingStatus('Cargando MediaPipe Pose, Face, Hand & ImageSegmenter (GPU)...');
 
       try {
         const vision = await FilesetResolver.forVisionTasks(
@@ -294,7 +349,7 @@ export default function App() {
       }
 
       setLoadingProgress(100);
-      setLoadingStatus('¡Espejo AR UNIFRANZ • Nueva Malla 2026 Listo!');
+      setLoadingStatus('¡Espejo AR Ingeniería de Sistemas • Nueva Malla 2026 Listo!');
       setTimeout(() => setIsReady(true), 250);
     },
     [preloadAssets]
@@ -313,7 +368,7 @@ export default function App() {
   const showBanner = useCallback((label) => {
     if (!label) return;
     setGestureBanner(label);
-    setTimeout(() => setGestureBanner(null), 2200);
+    setTimeout(() => setGestureBanner(null), 2400);
   }, []);
 
   const triggerEnergyShockwave = useCallback(
@@ -322,15 +377,53 @@ export default function App() {
         x: normX,
         y: normY,
         radius: 12,
-        maxRadius: Math.max(window.innerWidth, window.innerHeight) * 0.65,
-        alpha: 0.9,
+        maxRadius: Math.max(window.innerWidth, window.innerHeight) * 0.72,
+        alpha: 0.95,
       });
       showBanner(label);
     },
     [showBanner]
   );
 
-  // Girar ruleta de rol profesional para todas las personas rastreadas
+  // Explosión de partículas naranjas y blancas al revelar la mención ganadora o fusionar manos
+  const triggerParticleExplosion = useCallback((centerX, centerY, tokensList) => {
+    const tokens = tokensList || ['AI', '0', '1', '{ }', 'CLOUD', 'REACT', '★'];
+    for (let i = 0; i < 42; i++) {
+      const angle = (i / 42) * Math.PI * 2 + Math.random() * 0.2;
+      const speed = 4 + Math.random() * 10;
+      trackingRef.current.burstParticles.push({
+        x: centerX,
+        y: centerY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        text: tokens[i % tokens.length],
+        size: 13 + Math.random() * 11,
+        alpha: 1,
+        color: i % 2 === 0 ? '#FF6B00' : '#FFFFFF',
+      });
+    }
+  }, []);
+
+  // Alternar entre [ Visor Oculus Blanco ] -> [ Corona UNIFRANZ ] -> [ Ambos ] -> [ Modo Hacker HUD ]
+  const cycleAccessoryMode = useCallback(
+    (originNorm = { x: 0.5, y: 0.35 }, fromPeaceGesture = false) => {
+      setAccessoryModeIdx((prev) => {
+        const nextIdx = (prev + 1) % ACCESSORY_MODES.length;
+        const nextMode = ACCESSORY_MODES[nextIdx];
+        triggerEnergyShockwave(
+          originNorm.x,
+          originNorm.y,
+          fromPeaceGesture
+            ? `✌️ GESTO PAZ DETECTADO: ${nextMode.label.toUpperCase()}`
+            : `MODO ACCESORIO: ${nextMode.label.toUpperCase()}`
+        );
+        return nextIdx;
+      });
+    },
+    [triggerEnergyShockwave]
+  );
+
+  // Girar ruleta de rol profesional de Ingeniería de Sistemas
   const spinRoleRoulette = useCallback(() => {
     const now = performance.now();
     trackingRef.current.trackedPersons.forEach((p) => {
@@ -338,28 +431,10 @@ export default function App() {
       p.scanStartTime = now;
       p.roleIndex = (p.roleIndex + 1 + Math.floor(Math.random() * 3)) % 4;
     });
-    triggerEnergyShockwave(0.5, 0.35, '🎰 RULETA HOLOGRÁFICA: NUEVO PERFIL ASIGNADO');
+    triggerEnergyShockwave(0.5, 0.35, '🎰 RULETA HOLOGRÁFICA: NUEVO ROL DE SISTEMAS ASIGNADO');
   }, [triggerEnergyShockwave]);
 
-  // Cambiar carrera ÚNICAMENTE mediante los botones de la interfaz
-  const selectCarrera = useCallback(
-    (nextCarrera) => {
-      setCarrera(nextCarrera);
-      const now = performance.now();
-      trackingRef.current.trackedPersons.forEach((p) => {
-        p.scanStartTime = now;
-        p.rouletteStartTime = now;
-      });
-      const label =
-        nextCarrera === 'derecho'
-          ? '⚖️ DERECHO • BALANZA HOLOGRÁFICA & ESCUDO LEGALTECH'
-          : '💻 ING. DE SISTEMAS • ESFERAS IA & DINO PIXEL';
-      triggerEnergyShockwave(0.5, 0.5, label);
-    },
-    [triggerEnergyShockwave]
-  );
-
-  // Capturar Foto Souvenir directamente desde el canvas en vivo
+  // Capturar Foto Souvenir bajo el sello #NuevaMallaSistemas #Unifranz
   const captureCommemorativePhoto = useCallback(() => {
     const mainCanvas = canvasRef.current;
     if (!mainCanvas) return;
@@ -406,25 +481,34 @@ export default function App() {
     ctx.lineWidth = 5;
     ctx.strokeRect(18, 18, W - 36, H - 36);
 
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.88)';
-    ctx.fillRect(36, 36, 330, 44);
+    const quizWinner = quizRef.current.winner;
+    const mentionStamp = quizWinner
+      ? quizWinner === 'IA'
+        ? 'MENCIÓN: INTELIGENCIA ARTIFICIAL'
+        : 'MENCIÓN: CIBERSEGURIDAD'
+      : 'NUEVA MALLA CURRICULAR 2026';
+
+    // Sello Superior Izquierdo (Resultado del Test AR o Nueva Malla Curricular)
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
+    ctx.fillRect(36, 36, 400, 46);
     ctx.strokeStyle = '#FF6B00';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(36, 36, 330, 44);
+    ctx.lineWidth = 2.2;
+    ctx.strokeRect(36, 36, 400, 46);
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '800 14px "Orbitron", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('INAUGURACIÓN NUEVA MALLA 2026', 201, 63);
+    ctx.fillText(`🏆 ${mentionStamp}`, 236, 64);
 
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.88)';
-    ctx.fillRect(W - 310, 36, 270, 44);
+    // Sello Superior Derecho (#NuevaMallaSistemas #Unifranz)
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.9)';
+    ctx.fillRect(W - 385, 36, 345, 46);
     ctx.strokeStyle = '#FF6B00';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(W - 310, 36, 270, 44);
+    ctx.lineWidth = 2.2;
+    ctx.strokeRect(W - 385, 36, 345, 46);
     ctx.fillStyle = '#FF6B00';
-    ctx.font = '800 16px "Orbitron", sans-serif';
+    ctx.font = '800 14.5px "Orbitron", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('#InnovaciónUnifranz', W - 175, 64);
+    ctx.fillText('#NuevaMallaSistemas #Unifranz', W - 212, 65);
 
     const footerY = H - 145;
     const footerGrad = ctx.createLinearGradient(0, footerY, W, H);
@@ -446,10 +530,15 @@ export default function App() {
       ctx.fillText('UNIFRANZ', 46, footerY + 68);
     }
 
-    const activeCareer = CAREERS[stateRef.current.carrera] || CAREERS.sistemas;
     const firstPerson = trackingRef.current.trackedPersons[0];
-    const roleIdx = firstPerson ? firstPerson.roleIndex % activeCareer.roles.length : 0;
-    const assignedRole = activeCareer.roles[roleIdx];
+    const roleIdx = firstPerson ? firstPerson.roleIndex % SISTEMAS_CAREER.roles.length : 0;
+    const assignedRole =
+      quizWinner === 'IA'
+        ? 'Mención: Inteligencia Artificial'
+        : quizWinner === 'CIBERSEGURIDAD'
+        ? 'Mención: Ciberseguridad'
+        : SISTEMAS_CAREER.roles[roleIdx];
+
     const nowStr = new Date().toLocaleDateString('es-BO', {
       year: 'numeric',
       month: 'short',
@@ -461,31 +550,35 @@ export default function App() {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#FF6B00';
     ctx.font = '800 20px "Orbitron", sans-serif';
-    ctx.fillText(activeCareer.fullName.toUpperCase(), W - 48, footerY + 46);
+    ctx.fillText(SISTEMAS_CAREER.fullName.toUpperCase(), W - 48, footerY + 46);
 
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '700 15px "Space Grotesk", sans-serif';
-    ctx.fillText(`ROL DEL FUTURO: ${assignedRole.toUpperCase()}`, W - 48, footerY + 72);
+    ctx.fillText(
+      quizWinner
+        ? `${assignedRole.toUpperCase()} • LÍDER DEL FUTURO`
+        : `ROL DEL FUTURO: ${assignedRole.toUpperCase()}`,
+      W - 48,
+      footerY + 72
+    );
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.78)';
     ctx.font = '600 13px "Space Grotesk", sans-serif';
     ctx.fillText(
-      `UNIFRANZ AR MIRROR  •  ${activeCareer.shortName.toUpperCase()}  •  ${nowStr}  •  #InnovaciónUnifranz`,
+      `UNIFRANZ AR MIRROR  •  ${nowStr}  •  #NuevaMallaSistemas #Unifranz`,
       W - 48,
       footerY + 98
     );
 
     const framedDataUrl = outCanvas.toDataURL('image/png', 0.92);
-    const qrUrl = `${window.location.origin}/?souvenir=UNIFRANZ-AR&carrera=${encodeURIComponent(
-      activeCareer.shortName
-    )}&rol=${encodeURIComponent(assignedRole)}&fecha=${encodeURIComponent(
-      nowStr
-    )}&tag=InnovacionUnifranz`;
+    const qrUrl = `${window.location.origin}/?souvenir=UNIFRANZ-SIS&mencion=${encodeURIComponent(
+      assignedRole
+    )}&fecha=${encodeURIComponent(nowStr)}&tag=NuevaMallaSistemas`;
 
     setCapturedPhoto({
       framedDataUrl,
-      careerShort: activeCareer.shortName,
-      careerLabel: `${activeCareer.shortName} • ${assignedRole}`,
+      careerShort: SISTEMAS_CAREER.shortName,
+      careerLabel: `${SISTEMAS_CAREER.shortName} • ${assignedRole}`,
       timestamp: nowStr,
       sharePayload: qrUrl,
     });
@@ -514,7 +607,28 @@ export default function App() {
     [captureCommemorativePhoto]
   );
 
-  // Bucle único de renderizado y detección (requestAnimationFrame)
+  // Iniciar el Minijuego Interactivo "¿Qué Mención de Sistemas eres?" (IA vs. Ciberseguridad)
+  const startSistemasQuiz = useCallback(() => {
+    quizRef.current = {
+      active: true,
+      questionIdx: 0,
+      tiltSide: null,
+      holdMs: 0,
+      lastFrameTs: performance.now(),
+      aiVotes: 0,
+      cyberVotes: 0,
+      winner: null,
+      simTiltOverride: 0,
+    };
+    setQuizUiState({ active: true, winner: null });
+    triggerEnergyShockwave(
+      0.5,
+      0.32,
+      '🎮 TEST AR INICIADO: INCLINA TU CABEZA A IZQUIERDA (IA) O DERECHA (CIBERSEGURIDAD)'
+    );
+  }, [triggerEnergyShockwave]);
+
+  // Bucle único de renderizado y visión artificial (60 FPS en Canvas 2D)
   useEffect(() => {
     if (!isReady) return;
 
@@ -555,14 +669,18 @@ export default function App() {
       const H = canvas.height;
       const tState = trackingRef.current;
       const {
-        carrera: activeCarreraKey,
-        lentesVR: showVr,
-        hud: showHud,
-        fondoMetaverso: useSegBg,
+        accessoryModeIdx: accIdx,
+        hudEnabled: showHud,
+        manualKeyboard: forceKeyboard,
+        fondoMetaverso: manualTronBg,
         isSimulationMode: sim,
         simTwoPersons: sim2P,
+        simHandMode: sHandMode,
       } = stateRef.current;
-      const activeCareer = CAREERS[activeCarreraKey] || CAREERS.sistemas;
+
+      const currentAccessory = ACCESSORY_MODES[accIdx] || ACCESSORY_MODES[0];
+      // La Matriz Tron está activa si el usuario la activó manualmente o durante los 4 segundos posteriores a la Fusión de Manos
+      const isTronMatrixActive = manualTronBg || now < tState.tronFusionUntilTs;
 
       let drawX = 0;
       let drawY = 0;
@@ -667,7 +785,7 @@ export default function App() {
             }
           }
 
-          if (runHands && useSegBg && landmarkersRef.current.segmenter) {
+          if (runHands && isTronMatrixActive && landmarkersRef.current.segmenter) {
             try {
               const segResult = landmarkersRef.current.segmenter.segmentForVideo(dCanvas, ts);
               if (segResult?.confidenceMasks?.length > 0) {
@@ -703,7 +821,8 @@ export default function App() {
                   d[idx] = 255;
                   d[idx + 1] = 255;
                   d[idx + 2] = 255;
-                  d[idx + 3] = conf > 0.3 ? Math.min(255, Math.floor(((conf - 0.25) / 0.5) * 255)) : 0;
+                  d[idx + 3] =
+                    conf > 0.3 ? Math.min(255, Math.floor(((conf - 0.25) / 0.5) * 255)) : 0;
                 }
                 mCtx.putImageData(imgData, 0, 0);
 
@@ -729,11 +848,10 @@ export default function App() {
           }
         }
 
-        // Actualizar desvanecimiento suave de manos que salen de cuadro
         stepTrackedHandsFade(tState.trackedHands, now);
 
-        // === 2. DIBUJAR FONDO + VIDEO ESPEJO ===
-        if (useSegBg && hasSegCacheRef.current && fgCanvasRef.current) {
+        // === 2. DIBUJAR FONDO + VIDEO ESPEJO (CON MATRIZ TRON SI FUSIÓN ACTIVA) ===
+        if (isTronMatrixActive && hasSegCacheRef.current && fgCanvasRef.current) {
           drawMetaverseTronGrid(ctx, W, H, now);
           ctx.save();
           ctx.translate(W, 0);
@@ -746,13 +864,27 @@ export default function App() {
           ctx.scale(-1, 1);
           ctx.drawImage(video, W - drawX - drawW, drawY, drawW, drawH);
           ctx.restore();
+
+          if (isTronMatrixActive) {
+            ctx.save();
+            ctx.globalAlpha = 0.42;
+            drawMetaverseTronGrid(ctx, W, H, now);
+            ctx.restore();
+          }
         }
       } else if (sim) {
         // === MODO SIMULACIÓN HOLOGRÁFICA ===
-        if (useSegBg) {
+        if (isTronMatrixActive) {
           drawMetaverseTronGrid(ctx, W, H, now);
         } else {
-          const bgGrad = ctx.createRadialGradient(W * 0.5, H * 0.45, 50, W * 0.5, H * 0.5, W * 0.8);
+          const bgGrad = ctx.createRadialGradient(
+            W * 0.5,
+            H * 0.45,
+            50,
+            W * 0.5,
+            H * 0.5,
+            W * 0.8
+          );
           bgGrad.addColorStop(0, '#1C140D');
           bgGrad.addColorStop(0.55, '#0E0E0E');
           bgGrad.addColorStop(1, '#050505');
@@ -764,14 +896,20 @@ export default function App() {
         const sway = Math.sin(now * 0.0014) * 0.014;
         const centers = sim2P ? [0.68, 0.32] : [0.5];
 
+        const simQuizTilt = quizRef.current.active
+          ? quizRef.current.simTiltOverride !== 0
+            ? quizRef.current.simTiltOverride
+            : Math.sin(now * 0.0018) * 0.25
+          : 0;
+
         const simPoses = centers.map((cx, idx) => {
           const p = [];
           const s = sway * (idx === 0 ? 1 : -1);
           p[0] = { x: cx + s, y: 0.27 + breath, z: 0, visibility: 1 };
-          p[2] = { x: cx + 0.025 + s, y: 0.25 + breath, z: 0, visibility: 1 };
-          p[5] = { x: cx - 0.025 + s, y: 0.25 + breath, z: 0, visibility: 1 };
-          p[7] = { x: cx + 0.055 + s, y: 0.25 + breath, z: 0, visibility: 1 };
-          p[8] = { x: cx - 0.055 + s, y: 0.25 + breath, z: 0, visibility: 1 };
+          p[2] = { x: cx + 0.025 + s, y: 0.25 + breath - simQuizTilt * 0.08, z: 0, visibility: 1 };
+          p[5] = { x: cx - 0.025 + s, y: 0.25 + breath + simQuizTilt * 0.08, z: 0, visibility: 1 };
+          p[7] = { x: cx + 0.055 + s, y: 0.25 + breath - simQuizTilt * 0.1, z: 0, visibility: 1 };
+          p[8] = { x: cx - 0.055 + s, y: 0.25 + breath + simQuizTilt * 0.1, z: 0, visibility: 1 };
           p[11] = { x: cx + 0.11 + s, y: 0.43 + breath, z: 0, visibility: 1 };
           p[12] = { x: cx - 0.11 + s, y: 0.43 - breath * 0.5, z: 0, visibility: 1 };
           p[23] = { x: cx + 0.08 + s, y: 0.77 + breath, z: 0, visibility: 1 };
@@ -782,9 +920,13 @@ export default function App() {
         const simFaces = centers.map((cx, idx) => {
           const f = [];
           const s = sway * (idx === 0 ? 1 : -1);
-          f[33] = { x: cx + 0.042 + s, y: 0.25 + breath, z: 0 };
-          f[263] = { x: cx - 0.042 + s, y: 0.25 - breath * 0.4, z: 0 };
+          f[33] = { x: cx + 0.042 + s, y: 0.25 + breath - simQuizTilt * 0.06, z: 0 };
+          f[263] = { x: cx - 0.042 + s, y: 0.25 - breath * 0.4 + simQuizTilt * 0.06, z: 0 };
           f[1] = { x: cx + s, y: 0.28 + breath, z: 0 };
+          f[10] = { x: cx + s - simQuizTilt * 0.03, y: 0.18 + breath, z: 0 };
+          f[152] = { x: cx + s + simQuizTilt * 0.03, y: 0.36 + breath, z: 0 };
+          f[127] = { x: cx + 0.065 + s, y: 0.25 + breath - simQuizTilt * 0.06, z: 0 };
+          f[356] = { x: cx - 0.065 + s, y: 0.25 + breath + simQuizTilt * 0.06, z: 0 };
           return f;
         });
 
@@ -793,26 +935,52 @@ export default function App() {
         const detections = pairFacesToBodies(validPoses, validFaces, W);
         updateTrackedPersons(tState.trackedPersons, detections, W, now);
 
-        const handOsc = Math.sin(now * 0.002) * 0.05;
+        const handOsc = Math.sin(now * 0.002) * 0.035;
         const c0 = centers[0];
-        const makeSimHand = (hx, hy) => {
+
+        const makeSimHandByMode = (hx, hy, modeType) => {
           const arr = Array.from({ length: 21 }, () => ({ x: hx, y: hy, z: 0 }));
           arr[0] = { x: hx, y: hy + 0.06, z: 0 };
           arr[5] = { x: hx - 0.025, y: hy, z: 0 };
           arr[9] = { x: hx, y: hy - 0.01, z: 0 };
           arr[13] = { x: hx + 0.015, y: hy, z: 0 };
           arr[17] = { x: hx + 0.03, y: hy + 0.005, z: 0 };
-          arr[8] = { x: hx - 0.025, y: hy - 0.07, z: 0 };
-          arr[6] = { x: hx - 0.025, y: hy - 0.03, z: 0 };
-          arr[12] = { x: hx, y: hy - 0.075, z: 0 };
-          arr[10] = { x: hx, y: hy - 0.03, z: 0 };
+
+          if (modeType === 'GAMING') {
+            // Puño cerrado ('FIST') para activar Mandos PlayStation DualSense
+            [8, 6, 12, 10, 16, 14, 20, 18].forEach((k) => {
+              arr[k] = { x: hx, y: hy + 0.02, z: 0 };
+            });
+          } else if (modeType === 'KEYBOARD') {
+            // Dedos extendidos hacia abajo ('TYPING') para activar Teclado Holográfico
+            arr[6] = { x: hx - 0.025, y: hy + 0.02, z: 0 };
+            arr[8] = { x: hx - 0.025, y: hy + 0.08, z: 0 };
+            arr[10] = { x: hx, y: hy + 0.02, z: 0 };
+            arr[12] = { x: hx, y: hy + 0.085, z: 0 };
+            arr[14] = { x: hx + 0.015, y: hy + 0.02, z: 0 };
+            arr[16] = { x: hx + 0.015, y: hy + 0.08, z: 0 };
+            arr[18] = { x: hx + 0.03, y: hy + 0.02, z: 0 };
+            arr[20] = { x: hx + 0.03, y: hy + 0.075, z: 0 };
+          } else {
+            // Mano abierta hacia arriba ('OPEN_PALM') para Esfera IA y Escudo Ciberseguridad
+            arr[6] = { x: hx - 0.025, y: hy - 0.03, z: 0 };
+            arr[8] = { x: hx - 0.025, y: hy - 0.08, z: 0 };
+            arr[10] = { x: hx, y: hy - 0.03, z: 0 };
+            arr[12] = { x: hx, y: hy - 0.085, z: 0 };
+            arr[14] = { x: hx + 0.015, y: hy - 0.03, z: 0 };
+            arr[16] = { x: hx + 0.015, y: hy - 0.08, z: 0 };
+            arr[18] = { x: hx + 0.03, y: hy - 0.03, z: 0 };
+            arr[20] = { x: hx + 0.03, y: hy - 0.075, z: 0 };
+          }
           return arr;
         };
+
+        const spread = sHandMode === 'FUSION' ? 0.03 : sHandMode === 'KEYBOARD' ? 0.1 : 0.16;
         updateTrackedHands(
           tState.trackedHands,
           [
-            makeSimHand(c0 - 0.14 + handOsc, 0.46 + breath),
-            makeSimHand(c0 + 0.14 - handOsc, 0.46 - breath),
+            makeSimHandByMode(c0 - spread + handOsc, 0.48 + breath, sHandMode),
+            makeSimHandByMode(c0 + spread - handOsc, 0.48 - breath, sHandMode),
           ],
           tState.trackedPersons,
           toScreenX,
@@ -834,68 +1002,57 @@ export default function App() {
         tState.proximity = lerp(tState.proximity, rawProx, 0.1);
       }
 
-      // === 3. RENDERIZAR FILTROS POR CADA PERSONA DETECTADA (hasta MAX_PERSONS) ===
-      const shirtImg =
-        activeCarreraKey === 'sistemas' ? assetsRef.current.shirtSis : assetsRef.current.shirtDer;
-      const vrImg = assetsRef.current.vrHeadset;
-
+      // === 3. RENDERIZAR VISOR OCULUS QUEST BLANCO, CORONA UNIFRANZ Y ELEMENTOS ORBITALES DE SISTEMAS ===
       for (let idx = 0; idx < persons.length; idx++) {
         const person = persons[idx];
 
-        // 3A. Polera anclada a hombros (manteniendo proporción original)
-        if (person.hasPose && shirtImg) {
-          ctx.save();
-          ctx.translate(person.shoulderCenterX, person.shoulderCenterY);
-          ctx.rotate(person.shoulderAngle);
-
-          const shirtW = person.shoulderWidth * AR_CONFIG.SHIRT_WIDTH_FACTOR;
-          const naturalRatio = (shirtImg.naturalHeight || 800) / (shirtImg.naturalWidth || 800);
-          const shirtH = shirtW * naturalRatio;
-          const collarOffsetY = -shirtH * AR_CONFIG.SHIRT_COLLAR_OFFSET_Y;
-
-          ctx.drawImage(shirtImg, -shirtW / 2, collarOffsetY, shirtW, shirtH);
-          ctx.restore();
-        }
-
-        // 3B. Elementos exclusivos de la carrera seleccionada (nunca mezclados)
-        if (person.hasPose) {
-          if (activeCarreraKey === 'sistemas') {
-            drawWalkingShoulderDino(
-              ctx,
-              person.shoulderCenterX,
-              person.shoulderCenterY,
-              person.shoulderWidth,
-              person.shoulderAngle,
-              now + person.id * 700
-            );
-          } else {
-            drawShoulderScalesEmblem(
-              ctx,
-              person.shoulderCenterX,
-              person.shoulderCenterY,
-              person.shoulderWidth,
-              person.shoulderAngle,
-              now + person.id * 700
-            );
-          }
-        }
-
-        // 3C. Lentes VR (FaceLandmarker de cerca + respaldo Pose de lejos; siempre visibles con la polera)
-        if (showVr && person.hasVr && vrImg) {
-          ctx.save();
-          ctx.translate(person.vrCenterX, person.vrCenterY);
-          ctx.rotate(person.vrAngle);
-
-          const vrW = person.vrWidth;
-          const vrRatio = (vrImg.naturalHeight || 800) / (vrImg.naturalWidth || 800);
-          const vrH = vrW * vrRatio;
-
-          ctx.drawImage(vrImg, -vrW / 2, -vrH * AR_CONFIG.VR_CENTER_Y_RATIO, vrW, vrH);
-          ctx.restore();
-        }
-
-        // 3D. HUD Biométrico & Ruleta de Rol Profesional (solo si accesorio HUD activo)
+        // 3A. Elementos Orbitales de Ingeniería de Sistemas (Cubo 3D, Microchip, DualSense, Red Neuronal, { </> } y Dino Runner)
         if (showHud) {
+          drawSistemasOrbitalIcons(ctx, person, W, H, now + idx * 600);
+        }
+
+        // 3B. Visor Oculus Quest Blanco Futurista (100% Procedural en Canvas 2D, sin correa superior)
+        const shouldDrawOculus =
+          currentAccessory.oculus || quizRef.current.winner !== null;
+        if (shouldDrawOculus && person.hasVr) {
+          drawProceduralWhiteOculusQuest(
+            ctx,
+            person.vrCenterX,
+            person.vrCenterY,
+            person.vrWidth,
+            person.vrAngle,
+            person.headYaw || 0,
+            now
+          );
+        }
+
+        // 3C. Modo Hacker HUD (Visor Ciber-Analítico)
+        if (currentAccessory.hackerHud && person.hasVr) {
+          drawHackerHudVisor(ctx, person, now);
+        }
+
+        // 3D. Corona Holográfica UNIFRANZ ("LÍDER DEL FUTURO")
+        const shouldDrawCrown =
+          currentAccessory.crown || quizRef.current.winner !== null;
+        if (shouldDrawCrown && person.hasVr) {
+          drawUnifranzHolographicCrown(
+            ctx,
+            person.foreheadX ?? person.vrCenterX,
+            person.foreheadY ?? person.vrCenterY - person.vrWidth * 0.3,
+            person.faceHeight || person.vrWidth * 0.9,
+            person.templeWidth || person.vrWidth * 0.78,
+            person.vrAngle,
+            now
+          );
+        }
+
+        // 3E. Badge Monumental y Efectos Especiales del Minijuego (IA vs Ciberseguridad)
+        if (idx === 0 && quizRef.current.winner) {
+          drawQuizResultEffects(ctx, person, quizRef.current.winner, W, H, now);
+        }
+
+        // 3F. Tarjeta HUD Flotante y Ruleta de Rol Profesional de Sistemas
+        if (showHud && !quizRef.current.active) {
           const elapsedScan = now - person.scanStartTime;
           const isInitialScan = elapsedScan < 1400;
 
@@ -938,14 +1095,19 @@ export default function App() {
           }
           ctx.restore();
 
-          const rolesList = activeCareer.roles;
+          const rolesList = SISTEMAS_CAREER.roles;
           const elapsedRoulette = now - person.rouletteStartTime;
           const isSpinningRoulette = elapsedRoulette < 1400;
-          const currentRoleText = isSpinningRoulette
-            ? rolesList[Math.floor(elapsedRoulette / 95) % rolesList.length]
-            : rolesList[person.roleIndex % rolesList.length];
+          const currentRoleText =
+            idx === 0 && quizRef.current.winner
+              ? quizRef.current.winner === 'IA'
+                ? 'Mención: Inteligencia Artificial'
+                : 'Mención: Ciberseguridad'
+              : isSpinningRoulette
+              ? rolesList[Math.floor(elapsedRoulette / 95) % rolesList.length]
+              : rolesList[person.roleIndex % rolesList.length];
 
-          const cardW = Math.min(310, Math.max(220, W * 0.21));
+          const cardW = Math.min(315, Math.max(225, W * 0.22));
           const cardH = 104;
           const rawCardX =
             idx === 0 && persons.length > 1
@@ -976,14 +1138,14 @@ export default function App() {
           ctx.font = '800 9.5px "Orbitron", sans-serif';
           ctx.textAlign = 'left';
           ctx.fillText(
-            `${activeCareer.badge}${persons.length > 1 ? ` // P#${idx + 1}` : ''}`,
+            `${SISTEMAS_CAREER.badge}${persons.length > 1 ? ` // P#${idx + 1}` : ''}`,
             cardX + 10,
             cardY + 14.5
           );
 
           ctx.fillStyle = '#FFFFFF';
           ctx.font = '700 11.5px "Space Grotesk", sans-serif';
-          ctx.fillText(activeCareer.profileTitle, cardX + 10, cardY + 42);
+          ctx.fillText(SISTEMAS_CAREER.profileTitle, cardX + 10, cardY + 42);
 
           ctx.fillStyle = isSpinningRoulette
             ? 'rgba(255, 107, 0, 0.25)'
@@ -1005,8 +1167,108 @@ export default function App() {
 
           ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
           ctx.font = '600 9px "Orbitron", monospace';
-          ctx.fillText('ROL DEL FUTURO • NUEVA MALLA', cardX + 10, cardY + 94);
+          ctx.fillText('#NuevaMallaSistemas #Unifranz', cardX + 10, cardY + 94);
           ctx.restore();
+        }
+      }
+
+      // === 3G. LÓGICA Y RENDERIZADO DEL MINIJUEGO AR "¿IA O CIBERSEGURIDAD?" (CONTROLADO POR CABEZA) ===
+      if (quizRef.current.active && persons.length > 0) {
+        const player = persons[0];
+        const qState = quizRef.current;
+        const dt = Math.min(100, Math.max(8, now - (qState.lastFrameTs || now)));
+        qState.lastFrameTs = now;
+
+        const currentQuestion = SIS_QUIZ_QUESTIONS[qState.questionIdx];
+        if (currentQuestion) {
+          const roll =
+            qState.simTiltOverride !== 0
+              ? qState.simTiltOverride
+              : player.vrAngle || player.shoulderAngle * 1.4;
+          const threshold = AR_CONFIG.QUIZ_HEAD_TILT_THRESHOLD_RAD;
+
+          let detectedChoice = null;
+          if (roll < -threshold) {
+            detectedChoice = 'LEFT';
+          } else if (roll > threshold) {
+            detectedChoice = 'RIGHT';
+          }
+
+          if (detectedChoice && detectedChoice === qState.tiltSide) {
+            qState.holdMs += dt;
+          } else if (detectedChoice) {
+            qState.tiltSide = detectedChoice;
+            qState.holdMs = dt;
+          } else {
+            qState.holdMs = Math.max(0, qState.holdMs - dt * 1.5);
+            if (qState.holdMs === 0) qState.tiltSide = null;
+          }
+
+          const fillProgress = clamp(qState.holdMs / AR_CONFIG.QUIZ_FILL_DURATION_MS, 0, 1);
+
+          drawHeadTiltQuizHUD(
+            ctx,
+            player,
+            currentQuestion,
+            qState.questionIdx,
+            SIS_QUIZ_QUESTIONS.length,
+            qState.tiltSide,
+            fillProgress,
+            W,
+            H
+          );
+
+          if (fillProgress >= 1) {
+            if (qState.tiltSide === 'LEFT') {
+              qState.aiVotes += 1;
+            } else {
+              qState.cyberVotes += 1;
+            }
+
+            qState.holdMs = 0;
+            qState.tiltSide = null;
+            qState.questionIdx += 1;
+
+            if (qState.questionIdx < SIS_QUIZ_QUESTIONS.length) {
+              triggerEnergyShockwave(
+                player.vrCenterX / W,
+                player.vrCenterY / H,
+                `⚡ RESPUESTA ${qState.questionIdx}/3 REGISTRADA`
+              );
+            } else {
+              // ¡Revelación Épica del Resultado! Equipa Visor Oculus Blanco + Corona Holográfica UNIFRANZ
+              const winnerKey = qState.aiVotes >= qState.cyberVotes ? 'IA' : 'CIBERSEGURIDAD';
+              qState.active = false;
+              qState.winner = winnerKey;
+
+              // Activar modo "Ambos" (Visor Oculus Blanco + Corona UNIFRANZ)
+              setAccessoryModeIdx(2);
+              setQuizUiState({ active: false, winner: winnerKey });
+
+              triggerParticleExplosion(
+                player.shoulderCenterX,
+                player.shoulderCenterY,
+                winnerKey === 'IA'
+                  ? ['AI', 'NEURAL', '10', 'GPT', 'ML', '★', '01']
+                  : ['SEC', 'AES-256', '🛡️', 'RSA', '0x7F', 'LOCK', '★']
+              );
+              triggerEnergyShockwave(
+                player.shoulderCenterX / W,
+                player.shoulderCenterY / H,
+                winnerKey === 'IA'
+                  ? '🏆 MENCIÓN ASIGNADA: INTELIGENCIA ARTIFICIAL + OCULUS & CORONA'
+                  : '🏆 MENCIÓN ASIGNADA: CIBERSEGURIDAD + OCULUS & CORONA'
+              );
+
+              setTimeout(() => {
+                startPhotoCountdown(
+                  winnerKey === 'IA'
+                    ? '👑 FOTO SOUVENIR: MENCIÓN INTELIGENCIA ARTIFICIAL'
+                    : '👑 FOTO SOUVENIR: MENCIÓN CIBERSEGURIDAD'
+                );
+              }, 1600);
+            }
+          }
         }
       }
 
@@ -1032,8 +1294,7 @@ export default function App() {
         }
       }
 
-      // === 5. ELEMENTOS EN MANOS SUAVIZADOS (ESTRICTAMENTE SEPARADOS POR CARRERA) ===
-      // Nota: NUNCA se cambia carrera ni accesorios desde gestos de manos.
+      // === 5. SUPERPODERES EN LAS MANOS, MANDOS DUALSENSE, TECLADO HOLOGRÁFICO Y GESTO DE PAZ ✌️ ===
       const trackedHands = tState.trackedHands;
       const handsByPersonId = new Map();
 
@@ -1046,7 +1307,7 @@ export default function App() {
         }
         handsByPersonId.get(hand.ownerPersonId).push(hand);
 
-        // Puntos cibernéticos sutiles en dedos (solo si HUD activo y mano visible)
+        // Nodos cibernéticos sutiles en articulaciones de la mano
         if (showHud && !hand.isMissing && hand.rawLandmarks) {
           ctx.save();
           ctx.globalAlpha = hand.alpha;
@@ -1061,120 +1322,206 @@ export default function App() {
           ctx.restore();
         }
 
-        // Gesto Amor y Paz para capturar foto (no modifica carrera ni accesorios)
+        // Control de Cambio de Accesorios: Gesto de Paz ✌️ (2 dedos levantados)
         if (!sim && !hand.isMissing && hand.gesture === 'PEACE') {
-          tState.peaceOrSmileHoldFrames++;
+          tState.peaceHoldFrames++;
           if (
-            tState.peaceOrSmileHoldFrames >= AR_CONFIG.PEACE_OR_SMILE_HOLD_FRAMES &&
-            now - tState.lastPhotoTriggerTime > AR_CONFIG.PHOTO_TRIGGER_COOLDOWN_MS &&
-            !stateRef.current.countdownActive
+            tState.peaceHoldFrames >= 7 &&
+            now - tState.lastAccessorySwitchTs > AR_CONFIG.ACCESSORY_SWITCH_COOLDOWN_MS
           ) {
-            tState.lastPhotoTriggerTime = now;
-            tState.peaceOrSmileHoldFrames = 0;
-            startPhotoCountdown('✌️ GESTO AMOR Y PAZ: FOTO EN 3... 2... 1...');
+            tState.lastAccessorySwitchTs = now;
+            tState.peaceHoldFrames = 0;
+            cycleAccessoryMode({ x: hand.x / W, y: hand.y / H }, true);
           }
         }
       }
 
-      // Dibujar elementos propios de cada carrera sobre las manos suavizadas de cada persona
+      // Evaluar poderes por persona
       handsByPersonId.forEach((hands, ownerId) => {
         const person = persons.find((p) => p.id === ownerId) || persons[0];
         if (!person) return;
 
-        if (activeCarreraKey === 'derecho') {
-          // SOLO elementos de Derecho: Escudo LegalTech + Balanza Holográfica suavizada
-          if (hands.length >= 2) {
-            const shieldX = (hands[0].x + hands[1].x) / 2;
-            const shieldY = (hands[0].y + hands[1].y) / 2;
-            const shieldAlpha = Math.min(hands[0].alpha, hands[1].alpha);
-            drawLegalTechShield(
-              ctx,
-              shieldX,
-              shieldY,
-              Math.max(105, person.shoulderWidth * AR_CONFIG.SHIELD_RADIUS_FACTOR),
-              now,
-              shieldAlpha
-            );
-          }
+        // A. Comprobar Fusión "Innovación Digital" (Juntar ambas palmas o puños chocando)
+        let isFused = false;
+        if (hands.length >= 2) {
+          const h1 = hands[0];
+          const h2 = hands[1];
+          const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+          const fuseThreshold = Math.max(135, person.shoulderWidth * 0.78);
 
-          hands.forEach((h) => {
-            drawHolographicScales(
-              ctx,
-              h.x,
-              h.y - 64,
-              Math.max(46, person.shoulderWidth * AR_CONFIG.SCALES_SIZE_FACTOR),
-              now,
-              h.tiltAngle,
-              h.alpha
-            );
-          });
-        } else if (activeCarreraKey === 'sistemas') {
-          // SOLO elementos de Sistemas: Núcleo Fusión Digital + Esfera Red Neuronal
-          let isFused = false;
-          if (hands.length >= 2) {
-            const h1 = hands[0];
-            const h2 = hands[1];
-            const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
-            const fuseThreshold = Math.max(140, person.shoulderWidth * 0.85);
+          if (handDist < fuseThreshold) {
+            isFused = true;
+            const coreX = (h1.x + h2.x) / 2;
+            const coreY = (h1.y + h2.y) / 2;
+            const coreAlpha = Math.min(h1.alpha, h2.alpha);
 
-            if (handDist < fuseThreshold) {
-              isFused = true;
-              const coreX = (h1.x + h2.x) / 2;
-              const coreY = (h1.y + h2.y) / 2;
-              const coreAlpha = Math.min(h1.alpha, h2.alpha);
-              drawDigitalFusionCore(
-                ctx,
-                coreX,
-                coreY,
-                Math.max(60, person.shoulderWidth * AR_CONFIG.FUSION_CORE_RADIUS_FACTOR),
-                now,
-                coreAlpha
+            drawDigitalFusionCore(
+              ctx,
+              coreX,
+              coreY,
+              Math.max(64, person.shoulderWidth * 0.36),
+              now,
+              coreAlpha
+            );
+
+            // Activar Matriz Cibernética Tron durante 4 segundos con onda de choque
+            tState.tronFusionUntilTs = now + AR_CONFIG.TRON_FUSION_DURATION_MS;
+            if (now - tState.lastFusionTriggerTs > 2200) {
+              tState.lastFusionTriggerTs = now;
+              triggerEnergyShockwave(
+                coreX / W,
+                coreY / H,
+                '⚡ FUSIÓN INNOVACIÓN DIGITAL: MATRIZ TRON ACTIVADA (4s)'
               );
-
-              const tokens = ['0', '1', '{ }', 'AI', '</>', '01'];
-              for (let b = 0; b < 2; b++) {
-                if (tState.burstParticles.length < 60) {
-                  const angle = Math.random() * Math.PI * 2;
-                  const speed = 4 + Math.random() * 7;
-                  tState.burstParticles.push({
-                    x: coreX,
-                    y: coreY,
-                    vx: Math.cos(angle) * speed,
-                    vy: Math.sin(angle) * speed,
-                    text: tokens[Math.floor(Math.random() * tokens.length)],
-                    size: 12 + Math.random() * 9,
-                    alpha: 1,
-                    color: Math.random() > 0.35 ? '#FF6B00' : '#FFFFFF',
-                  });
-                }
-              }
+              triggerParticleExplosion(coreX, coreY, ['0', '1', 'AI', 'TRON', '{ }', '</>']);
             }
           }
+        }
 
-          if (!isFused) {
-            hands.forEach((h, hIdx) => {
+        if (isFused) return;
+
+        // B. Comprobar Teclado Holográfico Flotante (Modo Hacker / Developer)
+        // Se activa si extiende ambas manos hacia adelante con palmas hacia abajo ('TYPING'), o si activó el botón Teclado / Modo Hacker HUD
+        const bothHandsTyping =
+          hands.length >= 2 &&
+          hands.every(
+            (h) =>
+              h.gesture === 'TYPING' ||
+              (h.y > person.shoulderCenterY + person.torsoHeight * 0.05 &&
+                h.y < person.shoulderCenterY + person.torsoHeight * 0.85 &&
+                h.gesture !== 'FIST' &&
+                h.gesture !== 'OPEN_PALM')
+          );
+
+        if (bothHandsTyping || forceKeyboard || currentAccessory.hackerHud) {
+          const kbCenterX = person.shoulderCenterX;
+          const kbCenterY = person.shoulderCenterY + person.torsoHeight * 0.42;
+          const kbWidth = person.shoulderWidth * AR_CONFIG.KEYBOARD_WIDTH_FACTOR;
+          const allFingerTips = hands.flatMap((h) => h.fingerTips || [{ x: h.x, y: h.y }]);
+
+          drawHolographicKeyboard(
+            ctx,
+            kbCenterX,
+            kbCenterY,
+            kbWidth,
+            allFingerTips,
+            now,
+            (hitX, hitY) => {
+              if (tState.burstParticles.length < 85) {
+                const codeWords = ['React', 'AI', 'Cloud', '0101', 'Node', 'Docker', 'PyTorch'];
+                tState.burstParticles.push({
+                  x: hitX,
+                  y: hitY,
+                  vx: (Math.random() - 0.5) * 1.8,
+                  vy: -3.2 - Math.random() * 3.5,
+                  text: codeWords[Math.floor(Math.random() * codeWords.length)],
+                  size: 11 + Math.random() * 6,
+                  alpha: 1,
+                  color: Math.random() > 0.4 ? '#FF6B00' : '#FFFFFF',
+                });
+              }
+            }
+          );
+        }
+
+        // C. Poderes Individuales en cada Mano
+        hands.forEach((h, hIdx) => {
+          if (h.gesture === 'FIST') {
+            // Cerrar el puño / agarrar en el aire -> Mando de PlayStation DualSense Holográfico vibrando
+            drawProceduralDualSenseController(
+              ctx,
+              h.x,
+              h.y - 18,
+              Math.max(82, person.shoulderWidth * AR_CONFIG.DUALSENSE_WIDTH_FACTOR),
+              h.tiltAngle,
+              now,
+              true,
+              h.alpha
+            );
+
+            // Disparar símbolos de PlayStation (△, ○, ✕, □) como partículas luminosas
+            if (tState.burstParticles.length < 85 && Math.random() < 0.35) {
+              const psSyms = ['△', '○', '✕', '□'];
+              const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
+              const speed = 3 + Math.random() * 5;
+              tState.burstParticles.push({
+                x: h.x,
+                y: h.y - 25,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                text: psSyms[Math.floor(Math.random() * psSyms.length)],
+                size: 14 + Math.random() * 8,
+                alpha: 1,
+                color: Math.random() > 0.45 ? '#FF6B00' : '#FFFFFF',
+              });
+            }
+          } else if (!bothHandsTyping) {
+            // Mano Izquierda abierta -> Esfera de Inteligencia Artificial que lanza sinapsis al Visor Oculus
+            // Mano Derecha abierta -> Escudo Hexagonal de Ciberseguridad con Candado Digital
+            if (h.anatomicalSide === 'LEFT_HAND') {
+              const oculusTarget = person.hasVr
+                ? { x: person.vrCenterX, y: person.vrCenterY }
+                : null;
               drawNeuralBinarySphere(
                 ctx,
                 h.x,
                 h.y - 24,
-                Math.max(40, person.shoulderWidth * AR_CONFIG.NEURAL_SPHERE_RADIUS_FACTOR),
-                now + hIdx * 500,
+                Math.max(44, person.shoulderWidth * AR_CONFIG.NEURAL_SPHERE_RADIUS_FACTOR),
+                now + hIdx * 400,
+                h.alpha,
+                oculusTarget
+              );
+            } else {
+              drawCybersecurityHandShield(
+                ctx,
+                h.x,
+                h.y - 24,
+                Math.max(48, person.shoulderWidth * AR_CONFIG.CYBER_SHIELD_RADIUS_FACTOR),
+                now + hIdx * 400,
                 h.alpha
               );
-            });
+            }
           }
-        }
+        });
       });
 
-      // === 6. PARTÍCULAS DE CÓDIGO (SOLO EN SISTEMAS) ===
-      if (activeCarreraKey === 'sistemas' && tState.burstParticles.length > 0) {
+      // Si el usuario activó el botón de Teclado Holográfico sin manos detectadas aún, mostrarlo frente a la persona
+      if (forceKeyboard && persons.length > 0 && trackedHands.length === 0) {
+        const p0 = persons[0];
+        drawHolographicKeyboard(
+          ctx,
+          p0.shoulderCenterX,
+          p0.shoulderCenterY + p0.torsoHeight * 0.42,
+          p0.shoulderWidth * AR_CONFIG.KEYBOARD_WIDTH_FACTOR,
+          [{ x: p0.shoulderCenterX, y: p0.shoulderCenterY + p0.torsoHeight * 0.42 }],
+          now,
+          (hitX, hitY) => {
+            if (tState.burstParticles.length < 75) {
+              const codeWords = ['React', 'AI', 'Cloud', '0101'];
+              tState.burstParticles.push({
+                x: hitX,
+                y: hitY,
+                vx: (Math.random() - 0.5) * 1.5,
+                vy: -3 - Math.random() * 3,
+                text: codeWords[Math.floor(Math.random() * codeWords.length)],
+                size: 12,
+                alpha: 1,
+                color: Math.random() > 0.4 ? '#FF6B00' : '#FFFFFF',
+              });
+            }
+          }
+        );
+      }
+
+      // === 6. PARTÍCULAS DE CÓDIGO, SÍMBOLOS PLAYSTATION Y EXPLOSIONES ===
+      if (tState.burstParticles.length > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         for (let i = tState.burstParticles.length - 1; i >= 0; i--) {
           const bp = tState.burstParticles[i];
           bp.x += bp.vx;
           bp.y += bp.vy;
-          bp.alpha -= 0.022;
+          bp.alpha -= 0.02;
 
           if (bp.alpha <= 0.03 || bp.x < -50 || bp.x > W + 50 || bp.y < -50 || bp.y > H + 50) {
             tState.burstParticles.splice(i, 1);
@@ -1187,11 +1534,9 @@ export default function App() {
           ctx.fillText(bp.text, bp.x, bp.y);
         }
         ctx.restore();
-      } else if (activeCarreraKey !== 'sistemas' && tState.burstParticles.length > 0) {
-        tState.burstParticles.length = 0;
       }
 
-      // === 7. PARTÍCULAS AMBIENTALES LIGERAS (SOLO SI HUD ACTIVO) ===
+      // === 7. PARTÍCULAS AMBIENTALES DE SISTEMAS ===
       if (showHud) {
         const prox = tState.proximity;
         const speedMultiplier = 0.7 + prox * 1.8;
@@ -1208,65 +1553,56 @@ export default function App() {
           const px = p.x * W;
           const py = p.y * H;
 
-          if (activeCarreraKey === 'sistemas') {
-            if (p.type === 'DINO') {
-              drawPixelDino(
-                ctx,
-                px,
-                py,
-                2.2 + prox * 0.9,
-                p.color,
-                clamp(p.alpha * (0.5 + prox * 0.5), 0.2, 0.9),
-                Math.floor(now / 220) % 2
-              );
-            } else {
-              ctx.save();
-              ctx.font = `700 ${Math.round(p.size + prox * 4)}px "Orbitron", monospace`;
-              ctx.fillStyle = p.color;
-              ctx.globalAlpha = clamp(p.alpha * (0.45 + prox * 0.5), 0.15, 0.85);
-              ctx.fillText(p.type, px, py);
-              ctx.restore();
-            }
+          if (p.type === 'DINO') {
+            drawPixelDino(
+              ctx,
+              px,
+              py,
+              2.2 + prox * 0.9,
+              p.color,
+              clamp(p.alpha * (0.5 + prox * 0.5), 0.2, 0.9),
+              Math.floor(now / 220) % 2
+            );
           } else {
             ctx.save();
+            ctx.font = `700 ${Math.round(p.size + prox * 4)}px "Orbitron", monospace`;
             ctx.fillStyle = p.color;
-            ctx.globalAlpha = clamp(p.alpha * (0.4 + prox * 0.45), 0.15, 0.8);
-            ctx.beginPath();
-            ctx.arc(px, py, 2.2 + prox * 1.8, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.globalAlpha = clamp(p.alpha * (0.45 + prox * 0.5), 0.15, 0.85);
+            ctx.fillText(p.type, px, py);
             ctx.restore();
           }
         });
       }
 
-      // === 8. DETECCIÓN DE SONRISA PARA FOTO ===
-      if (!sim && persons.length > 0) {
+      // === 8. DETECCIÓN DE SONRISA PARA CAPTURAR FOTO ===
+      if (!sim && persons.length > 0 && !quizRef.current.active) {
         const hasSmilingFace = persons.some(
           (p) => p.hasFace && detectSmileFromFace(p.rawFaceLandmarks, p.faceBlendshapes)
         );
         if (hasSmilingFace) {
-          tState.peaceOrSmileHoldFrames++;
+          tState.smileHoldFrames++;
           if (
-            tState.peaceOrSmileHoldFrames >= 14 &&
+            tState.smileHoldFrames >= AR_CONFIG.SMILE_HOLD_FRAMES &&
             now - tState.lastPhotoTriggerTime > AR_CONFIG.PHOTO_TRIGGER_COOLDOWN_MS &&
             !stateRef.current.countdownActive
           ) {
             tState.lastPhotoTriggerTime = now;
-            tState.peaceOrSmileHoldFrames = 0;
+            tState.smileHoldFrames = 0;
             startPhotoCountdown('😄 ¡SONRISA UNIFRANZ DETECTADA! CAPTURANDO...');
           }
         }
       }
 
-      // === 9. ONDAS DE ENERGÍA ===
+      // === 9. ONDAS DE CHOQUE (SHOCKWAVES NARANJA NEÓN) ===
       for (let i = tState.shockwaves.length - 1; i >= 0; i--) {
         const sw = tState.shockwaves[i];
-        sw.radius += 26;
+        sw.radius += 28;
         sw.alpha = Math.max(0, 1 - sw.radius / sw.maxRadius);
 
         ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
         ctx.strokeStyle = `rgba(255, 107, 0, ${sw.alpha})`;
-        ctx.lineWidth = 4 * sw.alpha + 1;
+        ctx.lineWidth = 5 * sw.alpha + 1;
         ctx.beginPath();
         ctx.arc(sw.x * W, sw.y * H, sw.radius, 0, Math.PI * 2);
         ctx.stroke();
@@ -1296,9 +1632,15 @@ export default function App() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [isReady, startPhotoCountdown]);
+  }, [
+    isReady,
+    startPhotoCountdown,
+    triggerEnergyShockwave,
+    triggerParticleExplosion,
+    cycleAccessoryMode,
+  ]);
 
-  const activeCareerObj = CAREERS[carrera] || CAREERS.sistemas;
+  const currentAccessoryObj = ACCESSORY_MODES[accessoryModeIdx] || ACCESSORY_MODES[0];
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0A0A0A] select-none">
@@ -1322,16 +1664,17 @@ export default function App() {
         <div className="fixed inset-0 z-40 bg-white/90 pointer-events-none transition-opacity duration-200" />
       )}
 
-      {/* Barra Superior Institucional */}
+      {/* Barra Superior Institucional UNIFRANZ • Ingeniería de Sistemas */}
       <header className="fixed top-0 inset-x-0 z-20 p-3 md:px-6 md:py-4 flex items-center justify-between gap-3 pointer-events-none">
         <div className="pointer-events-auto glass-panel px-4 py-2 rounded-2xl flex items-center gap-3.5">
           <UnifranzLogo className="h-8 md:h-10" />
           <div className="hidden sm:flex flex-col border-l border-white/15 pl-3.5">
             <span className="font-display font-bold text-[10px] text-[#FF6B00] tracking-widest uppercase">
-              INAUGURACIÓN NUEVA MALLA 2026
+              INAUGURACIÓN NUEVA MALLA 2026 • #NuevaMallaSistemas
             </span>
-            <span className="font-tech text-xs text-white/90 font-semibold">
-              {activeCareerObj.fullName}
+            <span className="font-tech text-xs text-white/95 font-semibold flex items-center gap-1.5">
+              <Code2 className="w-3.5 h-3.5 text-[#FF6B00]" />
+              {SISTEMAS_CAREER.fullName}
             </span>
           </div>
         </div>
@@ -1344,13 +1687,27 @@ export default function App() {
         )}
 
         <div className="pointer-events-auto flex items-center gap-2">
+          {/* Botón Destacado del Minijuego Interactivo "¿IA o Ciberseguridad?" */}
+          <button
+            onClick={startSistemasQuiz}
+            className={`px-3.5 py-2 rounded-2xl font-display font-extrabold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition shadow-neon-orange ${
+              quizUiState.active
+                ? 'bg-white text-black border-[#FF6B00] animate-pulse'
+                : 'bg-gradient-to-r from-[#FF6B00] to-[#FF5500] text-black border-white/30 hover:scale-105'
+            }`}
+            title="Iniciar Test AR controlado inclinando la cabeza: ¿IA o Ciberseguridad?"
+          >
+            <Gamepad2 className="w-4 h-4" />
+            <span>🎮 TEST AR: ¿IA O CIBERSEGURIDAD?</span>
+          </button>
+
           <button
             onClick={spinRoleRoulette}
-            className="glass-panel hover:bg-[#FF6B00] hover:text-black text-white px-3.5 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 transition"
-            title="Girar Ruleta de Rol Profesional del Futuro"
+            className="glass-panel hover:bg-[#FF6B00] hover:text-black text-white px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 transition"
+            title="Girar Ruleta de Rol Profesional de Ingeniería de Sistemas"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Nuevo Perfil</span>
+            <span className="hidden md:inline">Nuevo Rol</span>
           </button>
 
           <button
@@ -1360,36 +1717,63 @@ export default function App() {
                 ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
                 : 'glass-panel text-white/75 hover:text-white border-white/15'
             }`}
-            title="Activar/Desactivar Fondo Metaverso (segmentación)"
+            title="Activar/Desactivar Matriz Cibernética Tron"
           >
             <Layers className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Fondo VR</span>
+            <span className="hidden md:inline">Matriz Tron</span>
           </button>
 
           {isSimulationMode && (
-            <button
-              onClick={() => setSimTwoPersons((prev) => !prev)}
-              className={`px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
-                simTwoPersons
-                  ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
-                  : 'glass-panel text-[#FF6B00] border-[#FF6B00]/60'
-              }`}
-              title="Alternar 1 o 2 personas en simulación"
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>{simTwoPersons ? '2P Sim' : '1P Sim'}</span>
-            </button>
+            <>
+              <button
+                onClick={() =>
+                  setSimHandMode((prev) =>
+                    prev === 'POWERS'
+                      ? 'GAMING'
+                      : prev === 'GAMING'
+                      ? 'KEYBOARD'
+                      : prev === 'KEYBOARD'
+                      ? 'FUSION'
+                      : 'POWERS'
+                  )
+                }
+                className="px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border glass-panel text-[#FF6B00] border-[#FF6B00]/60"
+                title="Alternar gestos de mano en Modo Simulación (Esfera IA/Escudo -> Mandos PS5 -> Teclado -> Fusión Tron)"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Sim: {simHandMode}</span>
+              </button>
+
+              <button
+                onClick={() => setSimTwoPersons((prev) => !prev)}
+                className={`px-3 py-2 rounded-2xl font-display font-bold text-[11px] tracking-wider uppercase flex items-center gap-1.5 border transition ${
+                  simTwoPersons
+                    ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                    : 'glass-panel text-[#FF6B00] border-[#FF6B00]/60'
+                }`}
+                title="Alternar 1 o 2 personas en simulación"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>{simTwoPersons ? '2P' : '1P'}</span>
+              </button>
+            </>
           )}
 
           <div className="glass-panel px-3.5 py-2 rounded-2xl flex items-center gap-2.5 text-xs font-tech">
-            <span className="flex items-center gap-1 text-white/80 font-semibold" title="Personas detectadas">
+            <span
+              className="flex items-center gap-1 text-white/80 font-semibold"
+              title="Personas detectadas"
+            >
               <Users className="w-3.5 h-3.5 text-[#FF6B00]" />
               <span ref={peopleSpanRef}>0</span>
             </span>
             <span className="h-3.5 w-[1px] bg-white/20" />
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-[#FF6B00]" />
-              <span ref={fpsSpanRef} className="font-display font-bold text-[11px] tracking-wider text-[#FF6B00]">
+              <span
+                ref={fpsSpanRef}
+                className="font-display font-bold text-[11px] tracking-wider text-[#FF6B00]"
+              >
                 -- FPS
               </span>
             </span>
@@ -1406,84 +1790,93 @@ export default function App() {
             </span>
           </div>
           <p className="mt-5 font-display font-bold text-sm md:text-base tracking-[0.22em] uppercase text-[#FF6B00] bg-black/85 px-5 py-2 rounded-full border border-[#FF6B00]/60">
-            ¡POSA CON TUS FILTROS UNIFRANZ!
+            ¡POSA CON TU VISOR OCULUS & PODERES DE SISTEMAS!
           </p>
         </div>
       )}
 
-      {/* Panel Inferior: Grupo Carrera | Grupo Accesorios | Captura */}
-      <footer className="fixed bottom-0 inset-x-0 z-20 p-3 md:p-5 flex flex-col items-center pointer-events-none">
-        <div className="pointer-events-auto max-w-6xl w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col lg:flex-row items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center justify-center gap-2 bg-black/45 p-1.5 rounded-2xl border border-white/10">
-            <span className="hidden xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-white/50 px-2">
-              Carrera
+      {/* Panel Inferior: Selector de Accesorios (Gesto Paz ✌️) | Superpoderes Interactivos | Captura */}
+      <footer className="fixed bottom-0 inset-x-0 z-20 p-3 md:p-4 flex flex-col items-center pointer-events-none">
+        <div className="pointer-events-auto max-w-7xl w-full glass-panel rounded-3xl p-3 md:px-5 md:py-3 flex flex-col xl:flex-row items-center justify-between gap-3">
+          {/* Selector de Modo de Accesorios (También cambiable haciendo el gesto ✌️ Paz) */}
+          <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/45 p-1.5 rounded-2xl border border-white/10">
+            <span className="hidden 2xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-[#FF6B00] px-2">
+              ✌️ Accesorios
             </span>
-            <button
-              onClick={() => selectCarrera('derecho')}
-              aria-pressed={carrera === 'derecho'}
-              className={`px-4 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors ${
-                carrera === 'derecho'
-                  ? 'bg-[#FF6B00] text-black'
-                  : 'bg-white/5 hover:bg-white/10 text-white/75 border border-white/10'
-              }`}
-            >
-              <Scale className="w-4 h-4" />
-              <span>Derecho</span>
-            </button>
-
-            <button
-              onClick={() => selectCarrera('sistemas')}
-              aria-pressed={carrera === 'sistemas'}
-              className={`px-4 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors ${
-                carrera === 'sistemas'
-                  ? 'bg-[#FF6B00] text-black'
-                  : 'bg-white/5 hover:bg-white/10 text-white/75 border border-white/10'
-              }`}
-            >
-              <Code2 className="w-4 h-4" />
-              <span>Ing. de Sistemas</span>
-            </button>
+            {ACCESSORY_MODES.map((m, idx) => (
+              <button
+                key={m.id}
+                onClick={() => {
+                  setAccessoryModeIdx(idx);
+                  showBanner(`MODO ACTIVO: ${m.label.toUpperCase()}`);
+                }}
+                aria-pressed={accessoryModeIdx === idx}
+                className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
+                  accessoryModeIdx === idx
+                    ? 'bg-[#FF6B00] text-black border-[#FF6B00]'
+                    : 'bg-white/5 border-white/10 text-white/70 hover:text-white'
+                }`}
+              >
+                {m.id === 'OCULUS' && <Glasses className="w-4 h-4" />}
+                {m.id === 'CROWN' && <Crown className="w-4 h-4" />}
+                {m.id === 'BOTH' && <Zap className="w-4 h-4" />}
+                {m.id === 'HACKER_HUD' && <Terminal className="w-4 h-4" />}
+                <span>{m.shortLabel}</span>
+              </button>
+            ))}
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-2 bg-black/45 p-1.5 rounded-2xl border border-white/10">
-            <span className="hidden xl:inline text-[10px] font-display font-bold uppercase tracking-widest text-white/50 px-2">
-              Accesorios
-            </span>
+          {/* Guía Rápida de Superpoderes de Manos & Botones Interactivos */}
+          <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/45 p-1.5 rounded-2xl border border-white/10">
+            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 text-[11px] font-tech text-white/80">
+              <span className="text-[#FF6B00] font-bold">✋ Izq:</span> Esfera IA
+              <span className="text-white/25">|</span>
+              <span className="text-[#FF6B00] font-bold">✋ Der:</span> Escudo Ciber
+              <span className="text-white/25">|</span>
+              <span className="text-[#FF6B00] font-bold">✊ Puño:</span> Mando PS5
+              <span className="text-white/25">|</span>
+              <span className="text-[#FF6B00] font-bold">🙏 Juntar:</span> Fusión Tron
+            </div>
+
             <button
               onClick={() =>
-                setAccesorios((prev) => {
-                  const next = !prev.lentesVR;
-                  showBanner(next ? '🥽 LENTES VR ACTIVADOS' : 'LENTES VR DESACTIVADOS');
-                  return { ...prev, lentesVR: next };
+                setManualKeyboard((prev) => {
+                  const next = !prev;
+                  showBanner(
+                    next
+                      ? '⌨️ TECLADO HOLOGRÁFICO DEVELOPER ACTIVADO'
+                      : 'TECLADO HOLOGRÁFICO EN MODO AUTOMÁTICO'
+                  );
+                  return next;
                 })
               }
-              aria-pressed={accesorios.lentesVR}
-              className={`px-3.5 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors border ${
-                accesorios.lentesVR
+              aria-pressed={manualKeyboard}
+              className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
+                manualKeyboard
                   ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
-                  : 'bg-white/5 border-white/10 text-white/55 hover:text-white'
+                  : 'bg-white/5 border-white/10 text-white/65 hover:text-white'
               }`}
-              title="Activar/Desactivar Lentes VR sobre los ojos"
+              title="Mostrar Teclado Holográfico Flotante en el Aire"
             >
-              <Glasses className="w-4 h-4" />
-              <span>Lentes VR</span>
+              <Keyboard className="w-4 h-4" />
+              <span>Teclado Dev</span>
             </button>
 
             <button
               onClick={() =>
-                setAccesorios((prev) => {
-                  const next = !prev.hud;
-                  showBanner(next ? '✨ HUD FUTURISTA ACTIVADO' : 'HUD DESACTIVADO');
-                  return { ...prev, hud: next };
+                setHudEnabled((prev) => {
+                  const next = !prev;
+                  showBanner(next ? '✨ ORBITALES & HUD ACTIVADOS' : 'HUD DESACTIVADO');
+                  return next;
                 })
               }
-              aria-pressed={accesorios.hud}
-              className={`px-3.5 py-2.5 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-colors border ${
-                accesorios.hud
+              aria-pressed={hudEnabled}
+              className={`px-3 py-2 rounded-xl font-display font-bold text-xs tracking-wider uppercase flex items-center gap-1.5 transition-colors border ${
+                hudEnabled
                   ? 'bg-[#FF6B00]/25 border-[#FF6B00] text-[#FF6B00]'
-                  : 'bg-white/5 border-white/10 text-white/55 hover:text-white'
+                  : 'bg-white/5 border-white/10 text-white/65 hover:text-white'
               }`}
-              title="Activar/Desactivar Escáner y Tarjeta HUD"
+              title="Activar/Desactivar Íconos Orbitales de Sistemas y Tarjeta HUD"
             >
               <Sparkles className="w-4 h-4" />
               <span>HUD</span>
@@ -1491,9 +1884,9 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => startPhotoCountdown('📸 CAPTURANDO MOMENTO UNIFRANZ...')}
+            onClick={() => startPhotoCountdown('📸 CAPTURANDO MOMENTO #NuevaMallaSistemas...')}
             disabled={countdown !== null}
-            className="w-full lg:w-auto px-7 py-3 rounded-2xl bg-gradient-to-r from-[#FF6B00] to-[#FF5500] hover:from-[#FF7A1A] hover:to-[#FF6B00] text-black font-display font-black text-xs md:text-sm tracking-wider uppercase flex items-center justify-center gap-2.5 animate-cta-pulse transition-transform active:scale-95 disabled:opacity-50"
+            className="w-full xl:w-auto px-6 py-3 rounded-2xl bg-gradient-to-r from-[#FF6B00] to-[#FF5500] hover:from-[#FF7A1A] hover:to-[#FF6B00] text-black font-display font-black text-xs md:text-sm tracking-wider uppercase flex items-center justify-center gap-2.5 animate-cta-pulse transition-transform active:scale-95 disabled:opacity-50"
           >
             <Camera className="w-5 h-5 stroke-[2.5]" />
             <span>Capturar Foto</span>

@@ -11,7 +11,8 @@ let nextPersonId = 1;
 let nextHandId = 1;
 
 /**
- * Ordena dos puntos izquierda-a-derecha en pantalla para evitar rotaciones de 180°.
+ * Calcula el ángulo de rotación entre el punto izquierdo en pantalla y el derecho en pantalla
+ * evitando inversiones de 180°.
  */
 function orderedAngle(ax, ay, bx, by, maxAbsRad) {
   const lx = ax <= bx ? ax : bx;
@@ -23,11 +24,11 @@ function orderedAngle(ax, ay, bx, by, maxAbsRad) {
 }
 
 /**
- * Extrae y valida poses desde PoseLandmarker filtrando detecciones con visibility < umbral.
- * Incluye cálculo de respaldo para Lentes VR usando ojos (2, 5), orejas (7, 8) u hombros (11, 12).
+ * Extrae y valida poses desde PoseLandmarker (hombros 11 y 12, cadera 23 y 24, y respaldo de ojos/orejas/nariz).
  */
 export function extractValidPoses(rawPoses, toScreenX, toScreenY) {
   const threshold = AR_CONFIG.VISIBILITY_THRESHOLD;
+  const hipThreshold = AR_CONFIG.HIP_VISIBILITY_THRESHOLD ?? 0.25;
   const eyeThreshold = AR_CONFIG.POSE_EYE_VISIBILITY_THRESHOLD;
   const results = [];
 
@@ -39,38 +40,44 @@ export function extractValidPoses(rawPoses, toScreenX, toScreenY) {
     const vis12 = lm[12].visibility ?? 1;
     if (vis11 < threshold || vis12 < threshold) continue;
 
-    const sx1 = toScreenX(lm[11].x);
-    const sy1 = toScreenY(lm[11].y);
-    const sx2 = toScreenX(lm[12].x);
-    const sy2 = toScreenY(lm[12].y);
+    const x11 = toScreenX(lm[11].x);
+    const y11 = toScreenY(lm[11].y);
+    const x12 = toScreenX(lm[12].x);
+    const y12 = toScreenY(lm[12].y);
 
-    const shoulderWidth = Math.hypot(sx1 - sx2, sy1 - sy2);
+    const shoulderWidth = Math.hypot(x12 - x11, y12 - y11);
     if (shoulderWidth < 18) continue;
 
-    const shoulderCenterX = (sx1 + sx2) / 2;
-    const shoulderCenterY = (sy1 + sy2) / 2;
-    const shoulderAngle = orderedAngle(sx1, sy1, sx2, sy2, AR_CONFIG.SHIRT_MAX_TILT_RAD);
+    const shoulderCenterX = (x11 + x12) / 2;
+    const shoulderCenterY = (y11 + y12) / 2;
+    const shoulderAngle = orderedAngle(x12, y12, x11, y11, 0.58);
 
     let hipCenterX = shoulderCenterX;
-    let hipCenterY = shoulderCenterY + shoulderWidth * 1.25;
-    let torsoHeight = shoulderWidth * 1.25;
+    let hipCenterY = shoulderCenterY + shoulderWidth * 1.42;
+    let torsoHeight = shoulderWidth * 1.42;
 
-    const vis23 = lm[23]?.visibility ?? 0;
-    const vis24 = lm[24]?.visibility ?? 0;
-    if (lm[23] && lm[24] && vis23 >= threshold && vis24 >= threshold) {
-      const hx1 = toScreenX(lm[23].x);
-      const hy1 = toScreenY(lm[23].y);
-      const hx2 = toScreenX(lm[24].x);
-      const hy2 = toScreenY(lm[24].y);
-      hipCenterX = (hx1 + hx2) / 2;
-      hipCenterY = (hy1 + hy2) / 2;
-      const measuredTorso = Math.hypot(hipCenterX - shoulderCenterX, hipCenterY - shoulderCenterY);
-      if (measuredTorso > shoulderWidth * 0.5) {
-        torsoHeight = measuredTorso;
+    if (lm[23] && lm[24]) {
+      const vis23 = lm[23].visibility ?? 1;
+      const vis24 = lm[24].visibility ?? 1;
+      const x23 = toScreenX(lm[23].x);
+      const y23 = toScreenY(lm[23].y);
+      const x24 = toScreenX(lm[24].x);
+      const y24 = toScreenY(lm[24].y);
+
+      if (vis23 >= hipThreshold || vis24 >= hipThreshold) {
+        hipCenterX = (x23 + x24) / 2;
+        hipCenterY = (y23 + y24) / 2;
+        const measuredTorso = Math.hypot(
+          hipCenterX - shoulderCenterX,
+          hipCenterY - shoulderCenterY
+        );
+        if (hipCenterY > shoulderCenterY + shoulderWidth * 0.45 && measuredTorso > shoulderWidth * 0.65) {
+          torsoHeight = clamp(measuredTorso, shoulderWidth * 0.95, shoulderWidth * 2.35);
+        }
       }
     }
 
-    // Respaldo de Lentes VR desde Pose (cuando FaceLandmarker no detecta caras lejanas)
+    // Respaldo del Visor Oculus desde Pose cuando la persona está lejos
     let poseVrX = shoulderCenterX + Math.sin(shoulderAngle) * shoulderWidth * 0.56;
     let poseVrY = shoulderCenterY - Math.cos(shoulderAngle) * shoulderWidth * 0.56;
     let poseVrAngle = shoulderAngle;
@@ -117,7 +124,6 @@ export function extractValidPoses(rawPoses, toScreenX, toScreenY) {
         }
       }
     } else if (lm[0] && (lm[0].visibility ?? 0) >= eyeThreshold) {
-      // Si ojos no son visibles pero la nariz sí, estimar ojos justo encima de la nariz
       const noseX = toScreenX(lm[0].x);
       const noseY = toScreenY(lm[0].y);
       poseVrX = noseX + Math.sin(shoulderAngle) * shoulderWidth * 0.08;
@@ -143,7 +149,7 @@ export function extractValidPoses(rawPoses, toScreenX, toScreenY) {
 }
 
 /**
- * Extrae y valida rostros desde FaceLandmarker usando los extremos exteriores de los ojos (33 y 263).
+ * Extrae y valida rostros desde FaceLandmarker (ojos 33 y 263, frente 10, sienes 127 y 356, mentón 152, puente nasal 168/6).
  */
 export function extractValidFaces(rawFaces, faceBlendshapes, toScreenX, toScreenY) {
   const results = [];
@@ -163,6 +169,9 @@ export function extractValidFaces(rawFaces, faceBlendshapes, toScreenX, toScreen
     const eyeCenterX = (ex1 + ex2) / 2;
     const eyeCenterY = (ey1 + ey2) / 2;
 
+    const rightEyeX = ex1 <= ex2 ? ex1 : ex2;
+    const rightEyeY = ex1 <= ex2 ? ey1 : ey2;
+
     const noseLm = lm[1] || { x: (lm[33].x + lm[263].x) / 2, y: (lm[33].y + lm[263].y) / 2 };
     const noseX = toScreenX(noseLm.x);
     const noseY = toScreenY(noseLm.y);
@@ -171,12 +180,37 @@ export function extractValidFaces(rawFaces, faceBlendshapes, toScreenX, toScreen
     const headYaw = clamp((noseX - eyeCenterX) / (eyeOuterDist * 0.7), -0.8, 0.8);
     const headPitch = clamp((noseY - eyeCenterY) / (eyeOuterDist * 0.9) - 0.35, -0.5, 0.5);
 
+    const foreheadX = lm[10] ? toScreenX(lm[10].x) : eyeCenterX - Math.sin(headRoll) * eyeOuterDist * 0.65;
+    const foreheadY = lm[10] ? toScreenY(lm[10].y) : eyeCenterY - Math.cos(headRoll) * eyeOuterDist * 0.65;
+
+    const chinX = lm[152] ? toScreenX(lm[152].x) : eyeCenterX + Math.sin(headRoll) * eyeOuterDist * 1.35;
+    const chinY = lm[152] ? toScreenY(lm[152].y) : eyeCenterY + Math.cos(headRoll) * eyeOuterDist * 1.35;
+
+    const faceHeight = Math.max(eyeOuterDist * 1.45, Math.hypot(chinX - foreheadX, chinY - foreheadY));
+
+    let templeWidth = eyeOuterDist * 1.48;
+    if (lm[127] && lm[356]) {
+      const tx1 = toScreenX(lm[127].x);
+      const ty1 = toScreenY(lm[127].y);
+      const tx2 = toScreenX(lm[356].x);
+      const ty2 = toScreenY(lm[356].y);
+      templeWidth = Math.max(eyeOuterDist * 1.2, Math.hypot(tx2 - tx1, ty2 - ty1));
+    }
+
     results.push({
       rawLandmarks: lm,
       blendshapes: faceBlendshapes?.[i] || null,
       eyeCenterX,
       eyeCenterY,
       eyeOuterDist,
+      rightEyeX,
+      rightEyeY,
+      foreheadX,
+      foreheadY,
+      chinX,
+      chinY,
+      faceHeight,
+      templeWidth,
       noseX,
       noseY,
       headRoll,
@@ -189,7 +223,7 @@ export function extractValidFaces(rawFaces, faceBlendshapes, toScreenX, toScreen
 }
 
 /**
- * Empareja cada cara con el cuerpo cuyo punto entre hombros quede más cerca de la nariz.
+ * Empareja cada cara con el cuerpo correspondiente.
  */
 export function pairFacesToBodies(poses, faces, canvasWidth) {
   const maxPairDist = canvasWidth * AR_CONFIG.FACE_BODY_MAX_DIST_NORM;
@@ -244,11 +278,11 @@ export function pairFacesToBodies(poses, faces, canvasWidth) {
 }
 
 /**
- * Actualiza el estado de seguimiento multi-persona con transición suave entre FaceLandmarker y Pose fallback.
+ * Actualiza el seguimiento multi-persona con interpolación suave.
  */
 export function updateTrackedPersons(trackedPersons, detections, canvasWidth, now) {
   const maxTrackDist = canvasWidth * AR_CONFIG.BODY_TRACK_MAX_DIST_NORM;
-  const alpha = AR_CONFIG.SMOOTHING_NEW_WEIGHT; // 0.4 -> anterior * 0.6 + nueva * 0.4
+  const alpha = AR_CONFIG.SMOOTHING_NEW_WEIGHT;
 
   const getDetAnchor = (det) =>
     det.pose
@@ -314,12 +348,18 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
       person.lastFaceTime = now;
       person.rawFaceLandmarks = det.face.rawLandmarks;
       person.faceBlendshapes = det.face.blendshapes;
+      person.foreheadX = lerp(person.foreheadX ?? det.face.foreheadX, det.face.foreheadX, alpha);
+      person.foreheadY = lerp(person.foreheadY ?? det.face.foreheadY, det.face.foreheadY, alpha);
+      person.faceHeight = lerp(person.faceHeight ?? det.face.faceHeight, det.face.faceHeight, alpha);
+      person.templeWidth = lerp(person.templeWidth ?? det.face.templeWidth, det.face.templeWidth, alpha);
+      person.rightEyeX = lerp(person.rightEyeX ?? det.face.rightEyeX, det.face.rightEyeX, alpha);
+      person.rightEyeY = lerp(person.rightEyeY ?? det.face.rightEyeY, det.face.rightEyeY, alpha);
+      person.headYaw = lerp(person.headYaw ?? det.face.headYaw, det.face.headYaw, alpha);
     } else if (now - person.lastFaceTime > AR_CONFIG.FACE_TIMEOUT_MS) {
       person.hasFace = false;
       person.rawFaceLandmarks = null;
     }
 
-    // Calcular objetivo unificado para Lentes VR (FaceLandmarker principal, Pose como respaldo)
     let targetVrX = null;
     let targetVrY = null;
     let targetVrW = null;
@@ -329,11 +369,10 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
     if (det.face) {
       targetVrX = det.face.eyeCenterX;
       targetVrY = det.face.eyeCenterY;
-      targetVrW = det.face.eyeOuterDist * AR_CONFIG.VR_WIDTH_FACTOR;
+      targetVrW = Math.max(det.face.templeWidth * 1.15, det.face.eyeOuterDist * AR_CONFIG.VR_WIDTH_FACTOR);
       targetVrAngle = det.face.headRoll;
       nextVrSource = 'face';
     } else if (det.pose && !person.hasFace) {
-      // Solo pasar al respaldo de Pose cuando FaceLandmarker ya agotó FACE_TIMEOUT_MS (evita parpadeos)
       targetVrX = det.pose.poseVrX;
       targetVrY = det.pose.poseVrY;
       targetVrW = det.pose.poseVrWidth;
@@ -348,7 +387,6 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
         person.vrWidth = targetVrW;
         person.vrAngle = targetVrAngle;
       } else {
-        // Si cambia entre face <-> pose, suavizar un poco más suave (0.28) para evitar saltos
         const vrAlpha = person.vrSource !== nextVrSource ? 0.28 : alpha;
         person.vrCenterX = lerp(person.vrCenterX, targetVrX, vrAlpha);
         person.vrCenterY = lerp(person.vrCenterY, targetVrY, vrAlpha);
@@ -357,6 +395,16 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
       }
       person.vrSource = nextVrSource;
       person.hasVr = true;
+
+      if (!det.face) {
+        const estFaceH = person.vrWidth * 0.92;
+        person.faceHeight = lerp(person.faceHeight || estFaceH, estFaceH, 0.25);
+        person.templeWidth = lerp(person.templeWidth || person.vrWidth * 0.85, person.vrWidth * 0.85, 0.25);
+        person.foreheadX = person.vrCenterX + Math.sin(person.vrAngle) * estFaceH * 0.32;
+        person.foreheadY = person.vrCenterY - Math.cos(person.vrAngle) * estFaceH * 0.32;
+        person.rightEyeX = person.vrCenterX - Math.cos(person.vrAngle) * person.vrWidth * 0.22;
+        person.rightEyeY = person.vrCenterY - Math.sin(person.vrAngle) * person.vrWidth * 0.22;
+      }
     }
   }
 
@@ -371,8 +419,12 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
 
     const vrInitX = face ? face.eyeCenterX : pose.poseVrX;
     const vrInitY = face ? face.eyeCenterY : pose.poseVrY;
-    const vrInitW = face ? face.eyeOuterDist * AR_CONFIG.VR_WIDTH_FACTOR : pose.poseVrWidth;
+    const vrInitW = face
+      ? Math.max(face.templeWidth * 1.15, face.eyeOuterDist * AR_CONFIG.VR_WIDTH_FACTOR)
+      : pose.poseVrWidth;
     const vrInitAngle = face ? face.headRoll : pose.poseVrAngle;
+    const initFaceH = face ? face.faceHeight : vrInitW * 0.92;
+    const initTempleW = face ? face.templeWidth : vrInitW * 0.85;
 
     trackedPersons.push({
       id,
@@ -388,7 +440,7 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
       hipCenterX: pose ? pose.hipCenterX : face.eyeCenterX,
       hipCenterY: pose ? pose.hipCenterY : face.eyeCenterY + face.eyeOuterDist * 5.0,
       shoulderWidth: pose ? pose.shoulderWidth : face.eyeOuterDist * 2.8,
-      torsoHeight: pose ? pose.torsoHeight : face.eyeOuterDist * 3.5,
+      torsoHeight: pose ? pose.torsoHeight : face.eyeOuterDist * 3.8,
       shoulderAngle: pose ? pose.shoulderAngle : 0,
       hasFace: Boolean(face),
       hasVr: true,
@@ -397,6 +449,13 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
       vrCenterY: vrInitY,
       vrWidth: vrInitW,
       vrAngle: vrInitAngle,
+      foreheadX: face ? face.foreheadX : vrInitX,
+      foreheadY: face ? face.foreheadY : vrInitY - initFaceH * 0.32,
+      faceHeight: initFaceH,
+      templeWidth: initTempleW,
+      rightEyeX: face ? face.rightEyeX : vrInitX - vrInitW * 0.22,
+      rightEyeY: face ? face.rightEyeY : vrInitY,
+      headYaw: face ? face.headYaw : 0,
       rawFaceLandmarks: face ? face.rawLandmarks : null,
       faceBlendshapes: face ? face.blendshapes : null,
     });
@@ -415,7 +474,10 @@ export function updateTrackedPersons(trackedPersons, detections, canvasWidth, no
 }
 
 /**
- * Rastrea y suaviza las manos detectadas (posición, inclinación y desvanecimiento al salir).
+ * Rastrea y suaviza las manos detectadas incluyendo:
+ * - Gesto ('FIST', 'PEACE', 'TYPING', 'OPEN_PALM', 'RAISED_PALM')
+ * - Identificación de Mano Izquierda vs Mano Derecha de la persona (según posición respecto al eje central del torso)
+ * - Coordenadas de puntas de los dedos (4, 8, 12, 16, 20) para iluminar teclas del Teclado Holográfico
  */
 export function updateTrackedHands(
   trackedHands,
@@ -427,7 +489,7 @@ export function updateTrackedHands(
   now
 ) {
   const maxHandDist = canvasWidth * AR_CONFIG.HAND_TRACK_MAX_DIST_NORM;
-  const alpha = AR_CONFIG.SMOOTHING_NEW_WEIGHT; // 0.4 -> anterior * 0.6 + nueva * 0.4
+  const alpha = AR_CONFIG.SMOOTHING_NEW_WEIGHT;
 
   const currentHands = [];
   if (handLandmarksList && handLandmarksList.length > 0 && persons.length > 0) {
@@ -439,16 +501,25 @@ export function updateTrackedHands(
       const palm = computePalmCenterAndTilt(handLm, toScreenX, toScreenY);
       const gesture = analyzeHandGesture(handLm);
 
-      let ownerPersonId = persons[0].id;
+      let ownerPerson = persons[0];
       let bestPersonDist = Infinity;
       for (let pIdx = 0; pIdx < persons.length; pIdx++) {
         const p = persons[pIdx];
         const d = Math.hypot(palm.x - p.shoulderCenterX, palm.y - p.shoulderCenterY);
         if (d < bestPersonDist) {
           bestPersonDist = d;
-          ownerPersonId = p.id;
+          ownerPerson = p;
         }
       }
+
+      // En vista espejo: la mano derecha real de la persona está a la izquierda de su centro de hombros (palm.x < shoulderCenterX),
+      // y su mano izquierda real está a la derecha de su centro de hombros (palm.x >= shoulderCenterX).
+      const anatomicalSide = palm.x >= ownerPerson.shoulderCenterX ? 'LEFT_HAND' : 'RIGHT_HAND';
+
+      const fingerTips = [4, 8, 12, 16, 20].map((idx) => ({
+        x: toScreenX(handLm[idx].x),
+        y: toScreenY(handLm[idx].y),
+      }));
 
       currentHands.push({
         x: palm.x,
@@ -456,13 +527,14 @@ export function updateTrackedHands(
         tiltAngle: palm.tiltAngle,
         palmSpan: palm.palmSpan,
         gesture,
-        ownerPersonId,
+        anatomicalSide,
+        fingerTips,
+        ownerPersonId: ownerPerson.id,
         rawLandmarks: handLm,
       });
     }
   }
 
-  // Emparejar detecciones actuales con manos previas
   const pairs = [];
   for (let cIdx = 0; cIdx < currentHands.length; cIdx++) {
     const c = currentHands[cIdx];
@@ -491,6 +563,8 @@ export function updateTrackedHands(
     th.tiltAngle = lerpAngle(th.tiltAngle, ch.tiltAngle, alpha);
     th.palmSpan = lerp(th.palmSpan, ch.palmSpan, alpha);
     th.gesture = ch.gesture;
+    th.anatomicalSide = ch.anatomicalSide;
+    th.fingerTips = ch.fingerTips;
     th.ownerPersonId = ch.ownerPersonId;
     th.rawLandmarks = ch.rawLandmarks;
     th.lastSeenTime = now;
@@ -498,7 +572,6 @@ export function updateTrackedHands(
     th.alpha = lerp(th.alpha, 1.0, 0.45);
   }
 
-  // Agregar manos nuevas
   for (let cIdx = 0; cIdx < currentHands.length; cIdx++) {
     if (matchedCur.has(cIdx)) continue;
     if (trackedHands.length >= AR_CONFIG.MAX_HANDS) break;
@@ -510,6 +583,8 @@ export function updateTrackedHands(
       tiltAngle: ch.tiltAngle,
       palmSpan: ch.palmSpan,
       gesture: ch.gesture,
+      anatomicalSide: ch.anatomicalSide,
+      fingerTips: ch.fingerTips,
       ownerPersonId: ch.ownerPersonId,
       rawLandmarks: ch.rawLandmarks,
       lastSeenTime: now,
@@ -518,7 +593,6 @@ export function updateTrackedHands(
     });
   }
 
-  // Marcar como salientes las manos no detectadas en este cuadro
   for (let tIdx = 0; tIdx < trackedHands.length; tIdx++) {
     if (!matchedTracked.has(tIdx)) {
       trackedHands[tIdx].isMissing = true;
